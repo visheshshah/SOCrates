@@ -3,682 +3,1792 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>SOC Copilot</title>
+  <title>SENTINEL — Autonomous SOC Analyst</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+
   <style>
     :root {
-      --bg: #0d1117;
-      --surface: #161b22;
-      --surface2: #21262d;
-      --border: #30363d;
-      --text: #e6edf3;
-      --text-muted: #7d8590;
-      --accent: #58a6ff;
-      --green: #3fb950;
-      --yellow: #d29922;
-      --red: #f85149;
-      --orange: #e3b341;
-      --purple: #bc8cff;
-      --cyan: #39d353;
-      --tool-bg: #0c2d48;
-      --tool-border: #1f6feb;
-      --result-bg: #0d2626;
-      --result-border: #238636;
-      --thinking-bg: #1c1f26;
+      /* Warm-black tactical palette */
+      --ink:        #0a0908;
+      --ink-2:      #0f0d0b;
+      --surface:    #15120f;
+      --surface-2:  #1b1714;
+      --surface-3:  #231e19;
+      --rule:       #2a2420;
+      --rule-2:     #3a322b;
+
+      --paper:      #f4ede1;
+      --paper-dim:  #d8cfc0;
+      --muted:      #8a8074;
+      --muted-2:    #5d544a;
+
+      /* Single hazard accent */
+      --hazard:     #ff4d1a;
+      --hazard-2:   #ffb089;
+
+      /* Threat severity */
+      --sev-critical: #ff2d1f;
+      --sev-high:     #ff7a1f;
+      --sev-medium:   #e3b341;
+      --sev-low:      #8ab26b;
+      --sev-info:     #6a9bb0;
+
+      --shadow: 0 1px 0 rgba(255,255,255,0.02), 0 10px 40px rgba(0,0,0,0.4);
     }
 
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-    body {
-      background: var(--bg);
-      color: var(--text);
-      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    html, body {
+      background: var(--ink);
+      color: var(--paper);
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
       font-size: 13px;
-      line-height: 1.6;
+      line-height: 1.55;
+      font-feature-settings: "ss01", "ss02", "zero";
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
       min-height: 100vh;
-    }
-
-    header {
-      border-bottom: 1px solid var(--border);
-      padding: 16px 24px;
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      background: var(--surface);
-    }
-
-    .logo { font-size: 18px; font-weight: 700; color: var(--accent); letter-spacing: -0.5px; }
-    .logo span { color: var(--text-muted); font-weight: 400; }
-    .badge {
-      font-size: 10px;
-      padding: 2px 8px;
-      border-radius: 12px;
-      background: var(--surface2);
-      border: 1px solid var(--border);
-      color: var(--text-muted);
-      letter-spacing: 0.5px;
-    }
-
-    .layout {
-      display: grid;
-      grid-template-columns: 420px 1fr;
-      height: calc(100vh - 57px);
-    }
-
-    /* === LEFT PANEL === */
-    .left-panel {
-      border-right: 1px solid var(--border);
-      display: flex;
-      flex-direction: column;
       overflow: hidden;
     }
 
-    .panel-header {
-      padding: 14px 18px;
-      border-bottom: 1px solid var(--border);
-      font-size: 11px;
-      color: var(--text-muted);
+    /* ═════════════════════════════════════════════════════════
+       GRAIN + SCANLINE OVERLAYS — atmosphere, not noise
+       ═════════════════════════════════════════════════════════ */
+    body::before {
+      content: "";
+      position: fixed; inset: 0;
+      pointer-events: none;
+      z-index: 1000;
+      opacity: 0.04;
+      mix-blend-mode: overlay;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 1 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+    }
+    body::after {
+      content: "";
+      position: fixed; inset: 0;
+      pointer-events: none;
+      z-index: 999;
+      background: repeating-linear-gradient(
+        to bottom,
+        transparent 0,
+        transparent 2px,
+        rgba(255,255,255,0.012) 2px,
+        rgba(255,255,255,0.012) 3px
+      );
+    }
+
+    /* ═════════════════════════════════════════════════════════
+       CLASSIFICATION MARQUEE — top strip
+       ═════════════════════════════════════════════════════════ */
+    .classification {
+      height: 22px;
+      background: var(--hazard);
+      color: #140800;
+      font-weight: 600;
+      font-size: 10px;
+      letter-spacing: 2.2px;
       text-transform: uppercase;
-      letter-spacing: 1px;
+      overflow: hidden;
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+    .classification-track {
+      display: flex;
+      gap: 64px;
+      white-space: nowrap;
+      animation: marquee 48s linear infinite;
+      will-change: transform;
+    }
+    .classification-track span::before { content: "▲  "; }
+    @keyframes marquee {
+      from { transform: translateX(0); }
+      to   { transform: translateX(-50%); }
+    }
+
+    /* ═════════════════════════════════════════════════════════
+       MAIN HEADER
+       ═════════════════════════════════════════════════════════ */
+    header.top {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      align-items: end;
+      gap: 32px;
+      padding: 22px 28px 18px;
+      border-bottom: 1px solid var(--rule);
+      background:
+        radial-gradient(ellipse 80% 60% at 10% 0%, rgba(255,77,26,0.06), transparent 60%),
+        var(--ink);
+    }
+    .wordmark {
+      font-family: 'Instrument Serif', 'Iowan Old Style', serif;
+      font-size: 46px;
+      line-height: 0.9;
+      letter-spacing: -1px;
+      font-weight: 400;
+      color: var(--paper);
+      position: relative;
+    }
+    .wordmark i {
+      font-style: italic;
+      color: var(--hazard);
+    }
+    .wordmark::after {
+      content: "";
+      position: absolute;
+      right: -14px; top: 6px;
+      width: 8px; height: 8px;
+      background: var(--hazard);
+      border-radius: 50%;
+      box-shadow: 0 0 0 0 rgba(255,77,26,0.8);
+      animation: pulse 2.2s ease-out infinite;
+    }
+    @keyframes pulse {
+      0%   { box-shadow: 0 0 0 0 rgba(255,77,26,0.5); }
+      70%  { box-shadow: 0 0 0 12px rgba(255,77,26,0); }
+      100% { box-shadow: 0 0 0 0 rgba(255,77,26,0); }
+    }
+    .tagline {
+      color: var(--muted);
+      font-size: 10px;
+      letter-spacing: 2.5px;
+      text-transform: uppercase;
+      margin-top: 4px;
+    }
+
+    .meta-block {
+      display: flex;
+      gap: 36px;
+      align-items: center;
+    }
+    .meta-cell {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .meta-label {
+      font-size: 9px;
+      letter-spacing: 2px;
+      color: var(--muted-2);
+      text-transform: uppercase;
+    }
+    .meta-value {
+      font-size: 13px;
+      color: var(--paper);
+      font-variant-numeric: tabular-nums;
+      font-weight: 500;
+    }
+    .meta-value.serif {
+      font-family: 'Instrument Serif', serif;
+      font-size: 22px;
+      line-height: 1;
+      font-weight: 400;
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      border: 1px solid var(--rule-2);
+      border-radius: 2px;
+      font-size: 10px;
+      letter-spacing: 1.8px;
+      text-transform: uppercase;
+      color: var(--sev-low);
+      background: rgba(138,178,107,0.04);
+    }
+    .status-pill .dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--sev-low);
+      box-shadow: 0 0 8px var(--sev-low);
+      animation: blink 1.6s ease-in-out infinite;
+    }
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50%      { opacity: 0.35; }
+    }
+
+    /* ═════════════════════════════════════════════════════════
+       THREE-COLUMN LAYOUT
+       ═════════════════════════════════════════════════════════ */
+    .layout {
+      display: grid;
+      grid-template-columns: 400px minmax(0, 1fr) 460px;
+      height: calc(100vh - 22px - 108px - 32px);
+      border-top: 1px solid var(--rule);
+    }
+
+    .column {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      position: relative;
+    }
+    .column + .column {
+      border-left: 1px solid var(--rule);
+    }
+
+    .col-header {
       display: flex;
       align-items: center;
       justify-content: space-between;
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--rule);
+      background: var(--ink-2);
+    }
+    .col-header .title {
+      font-size: 10px;
+      letter-spacing: 2.4px;
+      color: var(--muted);
+      text-transform: uppercase;
+    }
+    .col-header .subtitle {
+      font-size: 9px;
+      letter-spacing: 1.5px;
+      color: var(--muted-2);
+      font-variant-numeric: tabular-nums;
     }
 
-    textarea {
+    /* Corner registration marks on panels */
+    .corner-marks {
+      position: absolute;
+      pointer-events: none;
+      inset: 34px 4px 4px 4px;
+      z-index: 2;
+    }
+    .corner-marks::before,
+    .corner-marks::after {
+      content: "";
+      position: absolute;
+      width: 8px; height: 8px;
+      border: 1px solid var(--rule-2);
+    }
+    .corner-marks::before {
+      top: 0; left: 0;
+      border-right: none; border-bottom: none;
+    }
+    .corner-marks::after {
+      bottom: 0; right: 0;
+      border-left: none; border-top: none;
+    }
+
+    /* ═════════════════════════════════════════════════════════
+       LEFT — INTAKE
+       ═════════════════════════════════════════════════════════ */
+    .intake-body {
       flex: 1;
-      width: 100%;
-      background: var(--bg);
-      color: var(--text);
-      border: none;
-      padding: 16px;
-      font-family: inherit;
-      font-size: 12px;
-      resize: none;
-      outline: none;
-      line-height: 1.7;
-    }
-
-    textarea::placeholder { color: var(--text-muted); }
-
-    .left-footer {
-      padding: 14px 18px;
-      border-top: 1px solid var(--border);
-      display: flex;
-      gap: 10px;
-      align-items: center;
-      background: var(--surface);
-    }
-
-    button {
-      background: var(--accent);
-      color: #000;
-      border: none;
-      padding: 8px 20px;
-      border-radius: 6px;
-      font-family: inherit;
-      font-size: 12px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: opacity 0.15s;
-    }
-    button:hover { opacity: 0.85; }
-    button:disabled { opacity: 0.4; cursor: not-allowed; }
-
-    .btn-secondary {
-      background: var(--surface2);
-      color: var(--text);
-      border: 1px solid var(--border);
-    }
-
-    /* === RIGHT PANEL === */
-    .right-panel {
+      overflow-y: auto;
       display: flex;
       flex-direction: column;
-      overflow: hidden;
     }
 
-    .tabs {
-      display: flex;
-      border-bottom: 1px solid var(--border);
-      background: var(--surface);
-    }
-
-    .tab {
-      padding: 12px 20px;
-      font-size: 12px;
-      color: var(--text-muted);
-      cursor: pointer;
-      border-bottom: 2px solid transparent;
-      transition: all 0.15s;
-      user-select: none;
-    }
-    .tab:hover { color: var(--text); }
-    .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
-
-    .tab-content { display: none; flex: 1; overflow-y: auto; padding: 16px; }
-    .tab-content.active { display: block; }
-
-    /* === AGENT TRACE === */
-    .event {
-      margin-bottom: 10px;
-      border-radius: 6px;
-      overflow: hidden;
-      border: 1px solid var(--border);
-      animation: fadeIn 0.2s ease;
-    }
-
-    @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; } }
-
-    .event-header {
-      padding: 6px 12px;
-      font-size: 10px;
-      font-weight: 600;
-      letter-spacing: 0.8px;
+    .section-label {
+      font-size: 9px;
+      letter-spacing: 2.2px;
+      color: var(--muted-2);
       text-transform: uppercase;
+      padding: 14px 18px 8px;
       display: flex;
       align-items: center;
       gap: 8px;
     }
+    .section-label::before {
+      content: "";
+      width: 12px; height: 1px;
+      background: var(--rule-2);
+    }
+    .section-label::after {
+      content: "";
+      flex: 1;
+      height: 1px;
+      background: var(--rule);
+    }
+
+    .sample-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 6px;
+      padding: 0 14px 8px;
+    }
+    .sample-card {
+      position: relative;
+      padding: 11px 14px 10px;
+      border: 1px solid var(--rule);
+      background: var(--surface);
+      cursor: pointer;
+      transition: border-color 0.18s, background 0.18s, transform 0.18s;
+      text-align: left;
+      font-family: inherit;
+      color: inherit;
+    }
+    .sample-card:hover {
+      border-color: var(--hazard);
+      background: var(--surface-2);
+      transform: translateX(2px);
+    }
+    .sample-card .code {
+      font-size: 9px;
+      color: var(--muted);
+      letter-spacing: 1.5px;
+    }
+    .sample-card .name {
+      font-family: 'Instrument Serif', serif;
+      font-size: 20px;
+      line-height: 1.1;
+      margin-top: 2px;
+      font-weight: 400;
+    }
+    .sample-card .tags {
+      display: flex;
+      gap: 6px;
+      margin-top: 6px;
+      font-size: 9px;
+      letter-spacing: 1.3px;
+      color: var(--muted);
+      text-transform: uppercase;
+    }
+    .sample-card .tag-sev {
+      color: var(--sev-high);
+    }
+    .sample-card .arrow {
+      position: absolute;
+      right: 12px; top: 50%;
+      transform: translateY(-50%);
+      font-family: 'Instrument Serif', serif;
+      font-size: 22px;
+      color: var(--muted-2);
+      transition: color 0.18s, transform 0.18s;
+    }
+    .sample-card:hover .arrow {
+      color: var(--hazard);
+      transform: translateY(-50%) translateX(4px);
+    }
+
+    .payload-wrap {
+      position: relative;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      margin: 4px 14px 0;
+      border: 1px solid var(--rule);
+      background: var(--surface);
+      min-height: 200px;
+    }
+    .payload-wrap::before {
+      content: "JSON // ALERT PAYLOAD";
+      position: absolute;
+      top: -1px; left: 10px;
+      transform: translateY(-50%);
+      background: var(--ink);
+      padding: 0 8px;
+      font-size: 9px;
+      letter-spacing: 2px;
+      color: var(--muted);
+    }
+    textarea#alertInput {
+      flex: 1;
+      width: 100%;
+      background: transparent;
+      color: var(--paper-dim);
+      border: none;
+      padding: 16px 14px 12px;
+      font-family: inherit;
+      font-size: 11.5px;
+      line-height: 1.6;
+      resize: none;
+      outline: none;
+      min-height: 160px;
+    }
+    textarea#alertInput:focus {
+      color: var(--paper);
+    }
+    textarea#alertInput::placeholder { color: var(--muted-2); }
+
+    .intake-footer {
+      padding: 14px;
+      border-top: 1px solid var(--rule);
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: center;
+      background: var(--ink-2);
+    }
+
+    .btn-primary {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      padding: 13px 16px;
+      background: var(--hazard);
+      color: #140800;
+      border: none;
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 2.5px;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s;
+      clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px));
+    }
+    .btn-primary:hover:not(:disabled) {
+      background: #ff6a3d;
+    }
+    .btn-primary:active:not(:disabled) { transform: translateY(1px); }
+    .btn-primary:disabled {
+      background: var(--surface-3);
+      color: var(--muted);
+      cursor: not-allowed;
+    }
+    .btn-primary .arrow {
+      font-family: 'Instrument Serif', serif;
+      font-size: 18px;
+      font-weight: 400;
+      transform: translateY(-1px);
+    }
+
+    .btn-ghost {
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--rule-2);
+      padding: 13px 14px;
+      font-family: inherit;
+      font-size: 10px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .btn-ghost:hover { color: var(--paper); border-color: var(--paper-dim); }
+
+    .input-error {
+      grid-column: 1 / -1;
+      color: var(--sev-critical);
+      font-size: 10px;
+      letter-spacing: 1px;
+      min-height: 12px;
+    }
+
+    /* ═════════════════════════════════════════════════════════
+       CENTER — LIVE FEED
+       ═════════════════════════════════════════════════════════ */
+    .feed-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 18px 22px 24px;
+      scroll-behavior: smooth;
+      position: relative;
+    }
+
+    .feed-empty {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      gap: 16px;
+      text-align: center;
+      color: var(--muted-2);
+      padding: 40px;
+    }
+    .feed-empty .big {
+      font-family: 'Instrument Serif', serif;
+      font-style: italic;
+      font-size: 54px;
+      line-height: 1;
+      color: var(--paper-dim);
+      font-weight: 400;
+    }
+    .feed-empty .big em {
+      color: var(--hazard);
+      font-style: normal;
+    }
+    .feed-empty .hint {
+      font-size: 10px;
+      letter-spacing: 2.5px;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .feed-empty .rule {
+      width: 80px; height: 1px;
+      background: var(--rule-2);
+    }
+    .feed-empty .ascii {
+      font-size: 10px;
+      color: var(--muted-2);
+      letter-spacing: 1px;
+      line-height: 1.5;
+      white-space: pre;
+    }
+
+    .event {
+      position: relative;
+      margin-bottom: 14px;
+      padding-left: 22px;
+      animation: event-in 0.35s cubic-bezier(0.2, 0.8, 0.2, 1);
+    }
+    @keyframes event-in {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Timeline spine */
+    .event::before {
+      content: "";
+      position: absolute;
+      left: 5px; top: 20px; bottom: -14px;
+      width: 1px;
+      background: var(--rule);
+    }
+    .event:last-child::before { display: none; }
+
+    .event-marker {
+      position: absolute;
+      left: 0; top: 6px;
+      width: 11px; height: 11px;
+      border-radius: 50%;
+      background: var(--ink);
+      border: 1px solid var(--rule-2);
+    }
+    .event-marker::after {
+      content: "";
+      position: absolute;
+      inset: 2px;
+      border-radius: 50%;
+      background: var(--muted-2);
+    }
+
+    .event.thinking .event-marker::after { background: var(--sev-info); }
+    .event.tool_call .event-marker {
+      border-color: var(--hazard);
+    }
+    .event.tool_call .event-marker::after {
+      background: var(--hazard);
+      box-shadow: 0 0 6px var(--hazard);
+      animation: blink 1s ease-in-out infinite;
+    }
+    .event.tool_result .event-marker::after { background: var(--sev-low); }
+    .event.error .event-marker {
+      border-color: var(--sev-critical);
+    }
+    .event.error .event-marker::after { background: var(--sev-critical); }
+
+    .event-meta {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 9px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+    .event-meta .kind { color: var(--muted); }
+    .event-meta .time { color: var(--muted-2); font-variant-numeric: tabular-nums; }
+    .event-meta .tool-name {
+      color: var(--hazard);
+      font-weight: 600;
+    }
+
+    .event.thinking .event-meta .kind { color: var(--sev-info); }
+    .event.tool_call .event-meta .kind { color: var(--hazard); }
+    .event.tool_result .event-meta .kind { color: var(--sev-low); }
+    .event.error .event-meta .kind { color: var(--sev-critical); }
 
     .event-body {
-      padding: 10px 12px;
-      font-size: 12px;
-      line-height: 1.65;
+      font-size: 12.5px;
+      line-height: 1.6;
+      color: var(--paper-dim);
       white-space: pre-wrap;
       word-break: break-word;
     }
 
-    .event.thinking { background: var(--thinking-bg); border-color: var(--border); }
-    .event.thinking .event-header { color: var(--text-muted); }
-
-    .event.tool_call { background: var(--tool-bg); border-color: var(--tool-border); }
-    .event.tool_call .event-header { color: var(--accent); }
-
-    .event.tool_result { background: var(--result-bg); border-color: var(--result-border); }
-    .event.tool_result .event-header { color: var(--green); }
-
-    .event.error { background: #2d1117; border-color: var(--red); }
-    .event.error .event-header { color: var(--red); }
-
-    .tool-input {
-      margin-top: 6px;
-      padding: 8px;
-      background: rgba(0,0,0,0.3);
-      border-radius: 4px;
-      font-size: 11px;
-      color: var(--text-muted);
+    .event.thinking .event-body {
+      font-family: 'Instrument Serif', serif;
+      font-size: 16px;
+      font-style: italic;
+      line-height: 1.45;
+      color: var(--paper);
     }
 
-    .dot {
+    .event.error .event-body { color: var(--sev-critical); }
+
+    .code-block {
+      margin-top: 6px;
+      padding: 10px 12px;
+      background: var(--ink-2);
+      border-left: 2px solid var(--rule-2);
+      font-size: 11px;
+      color: var(--paper-dim);
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 280px;
+      overflow-y: auto;
+      line-height: 1.55;
+    }
+    .event.tool_call .code-block {
+      border-left-color: var(--hazard);
+      background: rgba(255,77,26,0.04);
+    }
+    .event.tool_result .code-block {
+      border-left-color: var(--sev-low);
+      background: rgba(138,178,107,0.03);
+    }
+
+    .result-toggle {
+      margin-top: 4px;
+      font-size: 9px;
+      letter-spacing: 1.8px;
+      color: var(--muted);
+      text-transform: uppercase;
+      cursor: pointer;
+      user-select: none;
+      border: none;
+      background: transparent;
+      padding: 2px 0;
+      font-family: inherit;
+    }
+    .result-toggle:hover { color: var(--hazard); }
+    .result-toggle::before { content: "▸ "; display: inline-block; transition: transform 0.15s; }
+    .result-toggle.open::before { transform: rotate(90deg); }
+
+    /* Typing indicator */
+    .caret {
+      display: inline-block;
+      width: 7px; height: 14px;
+      background: var(--hazard);
+      transform: translateY(2px);
+      margin-left: 2px;
+      animation: caret 0.9s step-end infinite;
+    }
+    @keyframes caret {
+      0%, 50%  { opacity: 1; }
+      51%, 100% { opacity: 0; }
+    }
+
+    /* ═════════════════════════════════════════════════════════
+       RIGHT — INCIDENT BRIEF
+       ═════════════════════════════════════════════════════════ */
+    .brief-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 22px 22px 28px;
+    }
+
+    .brief-empty {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      color: var(--muted-2);
+      padding: 40px 20px;
+    }
+    .brief-empty .document {
+      width: 140px;
+      height: 180px;
+      border: 1px solid var(--rule-2);
+      background:
+        repeating-linear-gradient(to bottom,
+          transparent 0 28px,
+          var(--rule) 28px 29px);
+      position: relative;
+      opacity: 0.6;
+    }
+    .brief-empty .document::before {
+      content: "CLASSIFIED";
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%) rotate(-18deg);
+      font-size: 14px;
+      letter-spacing: 4px;
+      color: var(--hazard);
+      border: 2px solid var(--hazard);
+      padding: 4px 10px;
+      opacity: 0.8;
+    }
+    .brief-empty .big {
+      font-family: 'Instrument Serif', serif;
+      font-size: 22px;
+      font-style: italic;
+      line-height: 1.3;
+      color: var(--paper-dim);
+    }
+    .brief-empty .hint {
+      font-size: 10px;
+      letter-spacing: 2.2px;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    /* Severity hero */
+    .severity-hero {
+      position: relative;
+      margin-bottom: 24px;
+      padding: 18px 0 16px;
+      border-top: 1px solid var(--rule);
+      border-bottom: 1px solid var(--rule);
+    }
+    .severity-hero .kicker {
+      font-size: 9px;
+      letter-spacing: 2.5px;
+      color: var(--muted);
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+    .severity-hero .level {
+      font-family: 'Instrument Serif', serif;
+      font-size: 72px;
+      line-height: 0.85;
+      font-weight: 400;
+      letter-spacing: -2px;
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+    }
+    .severity-hero .level .num {
+      font-size: 32px;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+    .severity-hero.sev-CRITICAL .level { color: var(--sev-critical); }
+    .severity-hero.sev-HIGH .level     { color: var(--sev-high); }
+    .severity-hero.sev-MEDIUM .level   { color: var(--sev-medium); }
+    .severity-hero.sev-LOW .level      { color: var(--sev-low); }
+
+    .action-row {
+      display: flex;
+      gap: 10px;
+      margin-top: 14px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .action-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 6px 10px;
+      border: 1px solid var(--rule-2);
+      font-size: 10px;
+      letter-spacing: 1.8px;
+      text-transform: uppercase;
+      font-weight: 600;
+    }
+    .action-pill::before {
+      content: "";
       width: 6px; height: 6px;
       border-radius: 50%;
       background: currentColor;
-      display: inline-block;
+    }
+    .action-ESCALATE { color: var(--sev-critical); border-color: var(--sev-critical); background: rgba(255,45,31,0.05); }
+    .action-BLOCK    { color: var(--sev-high); border-color: var(--sev-high); background: rgba(255,122,31,0.05); }
+    .action-MONITOR  { color: var(--sev-medium); border-color: var(--sev-medium); background: rgba(227,179,65,0.05); }
+    .action-CLOSE    { color: var(--sev-low); border-color: var(--sev-low); background: rgba(138,178,107,0.05); }
+
+    .alert-id {
+      font-size: 10px;
+      letter-spacing: 1.5px;
+      color: var(--muted);
+      margin-left: auto;
     }
 
-    /* === REPORT === */
-    .report-empty {
+    .brief-section { margin-bottom: 22px; }
+    .brief-section .title {
       display: flex;
       align-items: center;
-      justify-content: center;
-      height: 200px;
-      color: var(--text-muted);
-      flex-direction: column;
-      gap: 8px;
-    }
-
-    .severity-badge {
-      display: inline-block;
-      padding: 4px 14px;
-      border-radius: 20px;
-      font-size: 13px;
-      font-weight: 700;
-      letter-spacing: 1px;
-    }
-    .severity-CRITICAL { background: #4a0000; color: var(--red); border: 1px solid var(--red); }
-    .severity-HIGH { background: #3d1a00; color: var(--orange); border: 1px solid var(--orange); }
-    .severity-MEDIUM { background: #3d3000; color: var(--yellow); border: 1px solid var(--yellow); }
-    .severity-LOW { background: #0d2d00; color: var(--green); border: 1px solid var(--green); }
-
-    .action-badge {
-      display: inline-block;
-      padding: 3px 12px;
-      border-radius: 4px;
-      font-size: 11px;
-      font-weight: 600;
-      letter-spacing: 0.5px;
-    }
-    .action-ESCALATE { background: #4a0000; color: var(--red); }
-    .action-BLOCK { background: #3d1a00; color: var(--orange); }
-    .action-MONITOR { background: #3d3000; color: var(--yellow); }
-    .action-CLOSE { background: #0d2d00; color: var(--green); }
-
-    .report-section {
-      margin-bottom: 20px;
-    }
-
-    .section-title {
-      font-size: 10px;
+      gap: 10px;
+      font-size: 9px;
+      letter-spacing: 2.5px;
       text-transform: uppercase;
-      letter-spacing: 1px;
-      color: var(--text-muted);
-      margin-bottom: 8px;
-      padding-bottom: 4px;
-      border-bottom: 1px solid var(--border);
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+    .brief-section .title::before {
+      content: "§";
+      font-family: 'Instrument Serif', serif;
+      font-size: 16px;
+      color: var(--hazard);
+    }
+    .brief-section .title::after {
+      content: "";
+      flex: 1;
+      height: 1px;
+      background: var(--rule);
+    }
+    .brief-section .title .count {
+      background: var(--surface-2);
+      padding: 1px 7px;
+      border: 1px solid var(--rule-2);
+      font-size: 9px;
+      color: var(--paper-dim);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .summary-text {
+      font-family: 'Instrument Serif', serif;
+      font-size: 18px;
+      line-height: 1.45;
+      color: var(--paper);
+      font-weight: 400;
+    }
+    .summary-text::first-letter {
+      font-size: 34px;
+      float: left;
+      line-height: 0.95;
+      margin: 3px 8px 0 0;
+      color: var(--hazard);
+    }
+
+    .escalation-note {
+      margin-top: 14px;
+      padding: 11px 14px;
+      border-left: 3px solid var(--sev-critical);
+      background: rgba(255,45,31,0.05);
+      font-size: 11.5px;
+      line-height: 1.55;
+      color: var(--paper-dim);
+    }
+    .escalation-note::before {
+      content: "▲ ESCALATION JUSTIFIED — ";
+      color: var(--sev-critical);
+      font-weight: 700;
+      letter-spacing: 1.5px;
+      font-size: 10px;
     }
 
     .ioc-item {
       display: grid;
-      grid-template-columns: 70px 1fr auto;
-      gap: 8px;
-      padding: 8px 10px;
-      margin-bottom: 6px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 6px;
+      grid-template-columns: auto 1fr auto;
+      gap: 14px;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--rule);
       align-items: start;
     }
-
-    .ioc-type {
-      font-size: 10px;
+    .ioc-item:last-child { border-bottom: none; }
+    .ioc-type-col {
+      width: 54px;
+      font-size: 9px;
+      letter-spacing: 2px;
       text-transform: uppercase;
-      color: var(--text-muted);
-      padding-top: 2px;
+      color: var(--muted);
+      padding-top: 3px;
     }
-
-    .ioc-value { font-size: 12px; word-break: break-all; }
-    .ioc-detail { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
-
-    .confidence-bar {
-      width: 50px;
-      height: 4px;
-      background: var(--border);
-      border-radius: 2px;
+    .ioc-value-col { min-width: 0; }
+    .ioc-value {
+      font-size: 13px;
+      color: var(--paper);
+      word-break: break-all;
+      line-height: 1.4;
+    }
+    .ioc-item.malicious .ioc-value {
+      color: var(--sev-critical);
+    }
+    .ioc-source {
+      font-size: 10px;
+      color: var(--muted);
+      margin-top: 3px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+    .ioc-detail {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 4px;
+      line-height: 1.45;
+    }
+    .ioc-conf-col {
+      text-align: right;
+      min-width: 60px;
+    }
+    .conf-num {
+      font-family: 'Instrument Serif', serif;
+      font-size: 22px;
+      line-height: 1;
+      font-variant-numeric: tabular-nums;
+      color: var(--paper);
+    }
+    .ioc-item.malicious .conf-num { color: var(--sev-critical); }
+    .conf-label {
+      font-size: 8px;
+      letter-spacing: 1.8px;
+      color: var(--muted-2);
+      text-transform: uppercase;
+      margin-top: 2px;
+    }
+    .conf-bar {
+      margin-top: 5px;
+      height: 2px;
+      background: var(--rule);
       overflow: hidden;
     }
-    .confidence-fill { height: 100%; background: var(--accent); border-radius: 2px; }
+    .conf-fill {
+      height: 100%;
+      background: var(--muted);
+      transform-origin: left;
+      animation: conf-in 0.6s ease-out;
+    }
+    .ioc-item.malicious .conf-fill { background: var(--sev-critical); }
+    @keyframes conf-in {
+      from { transform: scaleX(0); }
+      to   { transform: scaleX(1); }
+    }
 
     .mitre-item {
-      padding: 10px 12px;
-      margin-bottom: 8px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 6px;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--rule);
     }
-    .mitre-id { color: var(--accent); font-weight: 700; font-size: 13px; }
-    .mitre-name { color: var(--text); margin-left: 8px; }
-    .mitre-tactic { font-size: 11px; color: var(--purple); margin-top: 4px; }
-    .mitre-desc { font-size: 11px; color: var(--text-muted); margin-top: 6px; line-height: 1.5; }
-
-    .step-list { list-style: none; }
-    .step-list li {
-      padding: 6px 0;
-      border-bottom: 1px solid var(--border);
+    .mitre-item:last-child { border-bottom: none; }
+    .mitre-head {
       display: flex;
+      align-items: baseline;
       gap: 10px;
-      font-size: 12px;
+      margin-bottom: 4px;
+      flex-wrap: wrap;
     }
-    .step-num { color: var(--accent); min-width: 20px; }
+    .mitre-id {
+      font-weight: 700;
+      color: var(--hazard);
+      font-size: 13px;
+      letter-spacing: 0.5px;
+    }
+    .mitre-name {
+      font-family: 'Instrument Serif', serif;
+      font-size: 18px;
+      color: var(--paper);
+      line-height: 1.2;
+    }
+    .mitre-tactic {
+      font-size: 9px;
+      letter-spacing: 2px;
+      color: var(--muted);
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+    .mitre-desc {
+      font-size: 11.5px;
+      line-height: 1.55;
+      color: var(--paper-dim);
+    }
+
+    .step-list {
+      list-style: none;
+      counter-reset: step;
+    }
+    .step-list li {
+      counter-increment: step;
+      padding: 8px 0 8px 32px;
+      border-bottom: 1px solid var(--rule);
+      font-size: 12px;
+      line-height: 1.55;
+      color: var(--paper-dim);
+      position: relative;
+    }
+    .step-list li::before {
+      content: counter(step, decimal-leading-zero);
+      position: absolute;
+      left: 0; top: 9px;
+      font-family: 'Instrument Serif', serif;
+      font-style: italic;
+      font-size: 15px;
+      color: var(--hazard);
+    }
+    .step-list li:last-child { border-bottom: none; }
 
     .notes-box {
+      padding: 14px 16px;
       background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 12px;
+      border: 1px solid var(--rule);
       font-size: 12px;
       line-height: 1.7;
+      color: var(--paper-dim);
       white-space: pre-wrap;
+      position: relative;
+    }
+    .notes-box::before {
+      content: "”";
+      position: absolute;
+      top: -10px; left: 8px;
+      font-family: 'Instrument Serif', serif;
+      font-size: 56px;
+      color: var(--hazard);
+      opacity: 0.25;
+      line-height: 1;
     }
 
-    .spinner {
-      display: inline-block;
-      width: 12px; height: 12px;
-      border: 2px solid var(--border);
-      border-top-color: var(--accent);
-      border-radius: 50%;
-      animation: spin 0.7s linear infinite;
+    .fp-list {
+      list-style: none;
     }
-    @keyframes spin { to { transform: rotate(360deg); } }
+    .fp-list li {
+      padding: 6px 0 6px 18px;
+      font-size: 11.5px;
+      color: var(--muted);
+      position: relative;
+    }
+    .fp-list li::before {
+      content: "◦";
+      position: absolute;
+      left: 4px;
+      color: var(--muted-2);
+    }
 
-    .status-bar {
-      padding: 8px 18px;
-      font-size: 11px;
-      color: var(--text-muted);
-      border-top: 1px solid var(--border);
-      background: var(--surface);
+    /* ═════════════════════════════════════════════════════════
+       FOOTER — RUNNING STATS
+       ═════════════════════════════════════════════════════════ */
+    footer.bottom {
+      height: 32px;
+      border-top: 1px solid var(--rule);
+      background: var(--ink-2);
+      display: flex;
+      align-items: center;
+      font-size: 10px;
+      letter-spacing: 1.8px;
+      color: var(--muted);
+      text-transform: uppercase;
+      padding: 0 18px;
+      gap: 24px;
+      overflow: hidden;
+    }
+    .stat {
       display: flex;
       align-items: center;
       gap: 8px;
-      min-height: 34px;
+    }
+    .stat .k { color: var(--muted-2); }
+    .stat .v {
+      color: var(--paper);
+      font-variant-numeric: tabular-nums;
+      font-weight: 500;
+    }
+    .stat .v.hz { color: var(--hazard); }
+    .stat-sep {
+      width: 1px;
+      height: 12px;
+      background: var(--rule-2);
+    }
+
+    .footer-right {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .receiving {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--hazard);
+    }
+    .receiving .bars {
+      display: inline-flex;
+      gap: 2px;
+      align-items: end;
+    }
+    .receiving .bars span {
+      width: 2px;
+      background: var(--hazard);
+      animation: bars 0.8s ease-in-out infinite;
+    }
+    .receiving .bars span:nth-child(1) { height: 4px;  animation-delay: 0.0s; }
+    .receiving .bars span:nth-child(2) { height: 8px;  animation-delay: 0.15s; }
+    .receiving .bars span:nth-child(3) { height: 12px; animation-delay: 0.3s; }
+    .receiving .bars span:nth-child(4) { height: 6px;  animation-delay: 0.45s; }
+    @keyframes bars {
+      0%, 100% { opacity: 0.3; transform: scaleY(0.5); }
+      50%      { opacity: 1; transform: scaleY(1); }
+    }
+
+    /* ═════════════════════════════════════════════════════════
+       SCROLLBAR — minimal
+       ═════════════════════════════════════════════════════════ */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb {
+      background: var(--rule-2);
+      border-radius: 0;
+    }
+    ::-webkit-scrollbar-thumb:hover { background: var(--muted-2); }
+
+    /* Selection */
+    ::selection { background: var(--hazard); color: #140800; }
+
+    /* ═════════════════════════════════════════════════════════
+       RESPONSIVE — collapse side columns
+       ═════════════════════════════════════════════════════════ */
+    @media (max-width: 1200px) {
+      .layout { grid-template-columns: 340px 1fr 380px; }
+      .wordmark { font-size: 36px; }
+      .severity-hero .level { font-size: 56px; }
+    }
+    @media (max-width: 980px) {
+      html, body { overflow: auto; }
+      .layout {
+        grid-template-columns: 1fr;
+        height: auto;
+      }
+      .column + .column {
+        border-left: none;
+        border-top: 1px solid var(--rule);
+      }
+      header.top { grid-template-columns: 1fr; gap: 14px; }
+      .meta-block { flex-wrap: wrap; gap: 18px; }
     }
   </style>
 </head>
 <body>
 
-<header>
-  <div class="logo">SOC <span>Copilot</span></div>
-  <div class="badge">RESEARCH PROTOTYPE</div>
-  <div class="badge" style="margin-left:auto">Claude + MCP</div>
-</header>
-
-<div class="layout">
-  <!-- LEFT: Alert Input -->
-  <div class="left-panel">
-    <div class="panel-header">
-      Alert Payload (JSON)
-      <span style="color:var(--accent);cursor:pointer" onclick="loadSample()">Load Sample</span>
-    </div>
-    <textarea id="alertInput" placeholder='{"alert_id": "...", "event_type": "...", "source_ip": "..."}'></textarea>
-    <div class="left-footer">
-      <button id="analyzeBtn" onclick="analyze()">Analyze Alert</button>
-      <button class="btn-secondary" onclick="clearAll()">Clear</button>
-      <span id="inputError" style="color:var(--red);font-size:11px"></span>
-    </div>
-  </div>
-
-  <!-- RIGHT: Output -->
-  <div class="right-panel">
-    <div class="tabs">
-      <div class="tab active" onclick="switchTab('trace', this)">Agent Trace</div>
-      <div class="tab" onclick="switchTab('report', this)">Incident Report</div>
-    </div>
-
-    <!-- Agent Trace -->
-    <div id="tab-trace" class="tab-content active">
-      <div id="traceContainer">
-        <div class="report-empty">
-          <div style="font-size:32px">🔍</div>
-          <div>Submit an alert to start the investigation</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Report -->
-    <div id="tab-report" class="tab-content">
-      <div id="reportContainer">
-        <div class="report-empty">
-          <div style="font-size:32px">📋</div>
-          <div>Report will appear here after investigation completes</div>
-        </div>
-      </div>
-    </div>
-
-    <div class="status-bar" id="statusBar">
-      <span id="statusText">Ready</span>
-    </div>
-  </div>
+<!-- ═════════ CLASSIFICATION MARQUEE ═════════ -->
+<div class="classification" aria-hidden="true">
+  <div class="classification-track" id="classTrack"></div>
 </div>
 
+<!-- ═════════ HEADER ═════════ -->
+<header class="top">
+  <div>
+    <div class="wordmark">Sent<i>i</i>nel</div>
+    <div class="tagline">Autonomous SOC Analyst · Claude · MCP</div>
+  </div>
+
+  <div class="meta-block">
+    <div class="meta-cell">
+      <span class="meta-label">Operator</span>
+      <span class="meta-value">SOC-01 / L1</span>
+    </div>
+    <div class="meta-cell">
+      <span class="meta-label">Session</span>
+      <span class="meta-value" id="sessionId">—</span>
+    </div>
+    <div class="meta-cell">
+      <span class="meta-label">UTC</span>
+      <span class="meta-value serif" id="utcClock">00:00:00</span>
+    </div>
+  </div>
+
+  <div class="status-pill" id="systemStatus">
+    <span class="dot"></span>
+    <span id="systemStatusText">System Nominal</span>
+  </div>
+</header>
+
+<!-- ═════════ THREE-COLUMN LAYOUT ═════════ -->
+<div class="layout">
+
+  <!-- ─── LEFT: INTAKE ─── -->
+  <section class="column intake">
+    <div class="col-header">
+      <span class="title">Ⅰ · Alert Intake</span>
+      <span class="subtitle">VECTOR / JSON</span>
+    </div>
+
+    <div class="intake-body">
+      <div class="section-label">Prefabricated Scenarios</div>
+      <div class="sample-grid" id="sampleGrid"></div>
+
+      <div class="section-label">Raw Payload</div>
+      <div class="payload-wrap">
+        <textarea id="alertInput" spellcheck="false"
+          placeholder='{"alert_id": "…", "event_type": "…", "source_ip": "…"}'></textarea>
+      </div>
+    </div>
+
+    <div class="intake-footer">
+      <button id="analyzeBtn" class="btn-primary" onclick="analyze()">
+        <span id="analyzeLabel">Initiate Investigation</span>
+        <span class="arrow">→</span>
+      </button>
+      <button class="btn-ghost" onclick="clearAll()">Reset</button>
+      <div class="input-error" id="inputError"></div>
+    </div>
+  </section>
+
+  <!-- ─── CENTER: LIVE FEED ─── -->
+  <section class="column feed">
+    <div class="col-header">
+      <span class="title">Ⅱ · Live Cognitive Feed</span>
+      <span class="subtitle" id="feedSubtitle">STANDBY</span>
+    </div>
+    <div class="corner-marks"></div>
+
+    <div class="feed-body" id="feedBody">
+      <div class="feed-empty" id="feedEmpty">
+        <div class="big">Awaiting <em>directive</em></div>
+        <div class="rule"></div>
+        <div class="hint">Select a scenario or paste an alert to begin</div>
+        <div class="ascii">
+┌─ MCP SERVERS ─────────────┐
+│ · virustotal      ONLINE  │
+│ · whois           ONLINE  │
+│ · threatintel     ONLINE  │
+│ · mitre_attack    ONLINE  │
+└───────────────────────────┘</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── RIGHT: INCIDENT BRIEF ─── -->
+  <section class="column brief">
+    <div class="col-header">
+      <span class="title">Ⅲ · Incident Brief</span>
+      <span class="subtitle" id="briefSubtitle">PENDING</span>
+    </div>
+    <div class="corner-marks"></div>
+
+    <div class="brief-body" id="briefBody">
+      <div class="brief-empty" id="briefEmpty">
+        <div class="document"></div>
+        <div class="big">The brief will compose itself<br>once evidence is gathered.</div>
+        <div class="hint">Severity · IOCs · MITRE · Recommendation</div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- ═════════ FOOTER ═════════ -->
+<footer class="bottom">
+  <div class="stat"><span class="k">MCP</span><span class="v">4</span></div>
+  <div class="stat-sep"></div>
+  <div class="stat"><span class="k">Tools</span><span class="v" id="statTools">—</span></div>
+  <div class="stat-sep"></div>
+  <div class="stat"><span class="k">Turn</span><span class="v" id="statTurn">0</span></div>
+  <div class="stat-sep"></div>
+  <div class="stat"><span class="k">Events</span><span class="v" id="statEvents">0</span></div>
+  <div class="stat-sep"></div>
+  <div class="stat"><span class="k">Elapsed</span><span class="v" id="statElapsed">00:00</span></div>
+
+  <div class="footer-right">
+    <span id="receiving" style="display:none" class="receiving">
+      <span class="bars"><span></span><span></span><span></span><span></span></span>
+      <span>Receiving Stream</span>
+    </span>
+    <span class="stat"><span class="k">Model</span><span class="v hz">claude-sonnet-4-6</span></span>
+  </div>
+</footer>
+
 <script>
+// ═════════════════════════════════════════════════════════════
+// PREFAB SCENARIOS
+// ═════════════════════════════════════════════════════════════
 const SAMPLES = [
   {
-    alert_id: "ALT-2024-001",
-    event_type: "outbound_connection",
-    source_ip: "10.0.1.45",
-    destination_ip: "185.220.101.47",
-    domain: "cmd.evil-domain.ru",
-    timestamp: "2024-01-15T14:23:11Z",
-    raw_log: "Jan 15 14:23:11 firewall PERMIT src=10.0.1.45 dst=185.220.101.47 dport=4444",
-    additional_context: { user: "john.doe", host: "WORKSTATION-042", bytes_sent: 48200 }
+    code: "SCN-01",
+    name: "C2 Beacon",
+    severity: "HIGH",
+    tags: ["OUTBOUND", "NON-STANDARD PORT"],
+    payload: {
+      alert_id: "ALT-2024-001",
+      event_type: "outbound_connection",
+      source_ip: "10.0.1.45",
+      destination_ip: "185.220.101.47",
+      domain: "cmd.evil-domain.ru",
+      timestamp: "2024-01-15T14:23:11Z",
+      raw_log: "Jan 15 14:23:11 firewall PERMIT src=10.0.1.45 dst=185.220.101.47 dport=4444",
+      additional_context: {
+        user: "john.doe",
+        host: "WORKSTATION-042",
+        bytes_sent: 48200,
+        bytes_recv: 12800,
+        connection_duration_seconds: 3600,
+        dst_port: 4444
+      }
+    }
   },
   {
-    alert_id: "ALT-2024-002",
-    event_type: "malware_execution",
-    source_ip: "10.0.2.100",
-    file_hash: "d41d8cd98f00b204e9800998ecf8427e",
-    hash_type: "md5",
-    timestamp: "2024-01-16T09:15:00Z",
-    raw_log: "Process created: C:\\Users\\admin\\AppData\\Local\\Temp\\svchost32.exe",
-    additional_context: { host: "SERVER-DB-01", parent_process: "winword.exe", user: "svc_account" }
+    code: "SCN-02",
+    name: "Malware Execution",
+    severity: "CRITICAL",
+    tags: ["PROCESS", "DROPPER"],
+    payload: {
+      alert_id: "ALT-2024-002",
+      event_type: "malware_execution",
+      source_ip: "10.0.2.100",
+      file_hash: "d41d8cd98f00b204e9800998ecf8427e",
+      hash_type: "md5",
+      timestamp: "2024-01-16T09:15:00Z",
+      raw_log: "Process created: C:\\Users\\admin\\AppData\\Local\\Temp\\svchost32.exe",
+      additional_context: {
+        host: "SERVER-DB-01",
+        parent_process: "winword.exe",
+        user: "svc_account",
+        process_path: "C:\\Users\\admin\\AppData\\Local\\Temp\\svchost32.exe",
+        command_line: "svchost32.exe -c 185.220.101.47:4444"
+      }
+    }
   },
   {
-    alert_id: "ALT-2024-003",
-    event_type: "dns_query",
-    source_ip: "10.0.3.22",
-    domain: "malware-c2.tk",
-    timestamp: "2024-01-17T22:05:33Z",
-    raw_log: "DNS query: malware-c2.tk -> NXDOMAIN (3 retries)",
-    additional_context: { query_count: 47, interval_seconds: 30, host: "LAPTOP-HR-05" }
+    code: "SCN-03",
+    name: "DNS Beaconing",
+    severity: "MEDIUM",
+    tags: ["DNS", "PERIODIC"],
+    payload: {
+      alert_id: "ALT-2024-003",
+      event_type: "dns_beaconing",
+      source_ip: "10.0.3.22",
+      domain: "malware-c2.tk",
+      timestamp: "2024-01-17T22:05:33Z",
+      raw_log: "DNS query: malware-c2.tk (47 queries in 23 minutes, interval ~30s)",
+      additional_context: {
+        query_count: 47,
+        interval_seconds: 30,
+        host: "LAPTOP-HR-05",
+        user: "sarah.jones",
+        first_seen: "2024-01-17T21:42:00Z"
+      }
+    }
   }
 ];
 
-let currentSample = 0;
+// ═════════════════════════════════════════════════════════════
+// CLASSIFICATION MARQUEE
+// ═════════════════════════════════════════════════════════════
+(function buildMarquee() {
+  const parts = [
+    "Sentinel · SOC-01 · Internal Use Only",
+    "AI-Assisted Triage · Human-in-the-Loop Review Required",
+    "MCP Tool Surface: VirusTotal · WHOIS · OTX · AbuseIPDB · MITRE ATT&CK",
+    "Classification: INTERNAL // TLP:AMBER // Analyst Copilot",
+    "Autonomous Reasoning Enabled · Escalation Threshold: HIGH"
+  ];
+  const line = parts.map(p => `<span>${p}</span>`).join("");
+  document.getElementById("classTrack").innerHTML = line + line; // doubled for seamless loop
+})();
 
-function loadSample() {
-  document.getElementById('alertInput').value = JSON.stringify(SAMPLES[currentSample % SAMPLES.length], null, 2);
-  currentSample++;
-  document.getElementById('inputError').textContent = '';
+// ═════════════════════════════════════════════════════════════
+// UTC CLOCK + SESSION ID
+// ═════════════════════════════════════════════════════════════
+function pad(n, w = 2) { return String(n).padStart(w, "0"); }
+function tickClock() {
+  const d = new Date();
+  document.getElementById("utcClock").textContent =
+    `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+}
+setInterval(tickClock, 1000);
+tickClock();
+
+function genSessionId() {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let s = "";
+  for (let i = 0; i < 6; i++) s += chars[Math.floor(Math.random() * chars.length)];
+  return `SNT-${s}`;
+}
+document.getElementById("sessionId").textContent = genSessionId();
+
+// ═════════════════════════════════════════════════════════════
+// SAMPLE CARDS
+// ═════════════════════════════════════════════════════════════
+function buildSamples() {
+  const grid = document.getElementById("sampleGrid");
+  grid.innerHTML = SAMPLES.map((s, i) => `
+    <button class="sample-card" data-idx="${i}" onclick="loadSample(${i})">
+      <div class="code">${s.code} · ${escHtml(s.payload.event_type)}</div>
+      <div class="name">${escHtml(s.name)}</div>
+      <div class="tags">
+        <span class="tag-sev">${s.severity}</span>
+        ${s.tags.map(t => `<span>· ${t}</span>`).join("")}
+      </div>
+      <span class="arrow">→</span>
+    </button>
+  `).join("");
+}
+buildSamples();
+
+function loadSample(idx) {
+  const s = SAMPLES[idx];
+  document.getElementById("alertInput").value = JSON.stringify(s.payload, null, 2);
+  document.getElementById("inputError").textContent = "";
 }
 
 function clearAll() {
-  document.getElementById('alertInput').value = '';
-  document.getElementById('traceContainer').innerHTML = `<div class="report-empty"><div style="font-size:32px">🔍</div><div>Submit an alert to start the investigation</div></div>`;
-  document.getElementById('reportContainer').innerHTML = `<div class="report-empty"><div style="font-size:32px">📋</div><div>Report will appear here after investigation completes</div></div>`;
-  setStatus('Ready');
+  document.getElementById("alertInput").value = "";
+  document.getElementById("inputError").textContent = "";
+  resetFeed();
+  resetBrief();
+  setSystemStatus("nominal", "System Nominal");
+  setFeedSubtitle("STANDBY");
+  setBriefSubtitle("PENDING");
+  stats.turn = 0; stats.events = 0; stats.tools = null;
+  renderStats();
+  stopElapsed();
+  document.getElementById("statElapsed").textContent = "00:00";
 }
 
-function switchTab(name, el) {
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-  el.classList.add('active');
-  document.getElementById(`tab-${name}`).classList.add('active');
+function resetFeed() {
+  document.getElementById("feedBody").innerHTML = `
+    <div class="feed-empty" id="feedEmpty">
+      <div class="big">Awaiting <em>directive</em></div>
+      <div class="rule"></div>
+      <div class="hint">Select a scenario or paste an alert to begin</div>
+      <div class="ascii">
+┌─ MCP SERVERS ─────────────┐
+│ · virustotal      ONLINE  │
+│ · whois           ONLINE  │
+│ · threatintel     ONLINE  │
+│ · mitre_attack    ONLINE  │
+└───────────────────────────┘</div>
+    </div>`;
+}
+function resetBrief() {
+  document.getElementById("briefBody").innerHTML = `
+    <div class="brief-empty">
+      <div class="document"></div>
+      <div class="big">The brief will compose itself<br>once evidence is gathered.</div>
+      <div class="hint">Severity · IOCs · MITRE · Recommendation</div>
+    </div>`;
 }
 
-function setStatus(text, spinning = false) {
-  const bar = document.getElementById('statusBar');
-  bar.innerHTML = spinning
-    ? `<span class="spinner"></span><span>${text}</span>`
-    : `<span id="statusText">${text}</span>`;
+// ═════════════════════════════════════════════════════════════
+// STATUS / STATS
+// ═════════════════════════════════════════════════════════════
+const stats = { turn: 0, events: 0, tools: null };
+let elapsedTimer = null;
+let elapsedStart = 0;
+
+function renderStats() {
+  document.getElementById("statTurn").textContent = stats.turn;
+  document.getElementById("statEvents").textContent = stats.events;
+  document.getElementById("statTools").textContent = stats.tools ?? "—";
 }
+
+function startElapsed() {
+  elapsedStart = Date.now();
+  elapsedTimer = setInterval(() => {
+    const s = Math.floor((Date.now() - elapsedStart) / 1000);
+    document.getElementById("statElapsed").textContent =
+      `${pad(Math.floor(s / 60))}:${pad(s % 60)}`;
+  }, 500);
+}
+function stopElapsed() {
+  if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null; }
+}
+
+function setSystemStatus(state, text) {
+  const pill = document.getElementById("systemStatus");
+  const txt = document.getElementById("systemStatusText");
+  txt.textContent = text;
+  pill.style.color = ({
+    nominal:   "var(--sev-low)",
+    active:    "var(--hazard)",
+    critical:  "var(--sev-critical)",
+    warning:   "var(--sev-medium)"
+  })[state] || "var(--sev-low)";
+  pill.querySelector(".dot").style.background = pill.style.color;
+  pill.querySelector(".dot").style.boxShadow = `0 0 8px ${pill.style.color}`;
+}
+
+function setFeedSubtitle(t) { document.getElementById("feedSubtitle").textContent = t; }
+function setBriefSubtitle(t) { document.getElementById("briefSubtitle").textContent = t; }
+
+function setReceiving(on) {
+  document.getElementById("receiving").style.display = on ? "inline-flex" : "none";
+}
+
+// ═════════════════════════════════════════════════════════════
+// EVENT RENDERING
+// ═════════════════════════════════════════════════════════════
+function timeStamp() {
+  const d = new Date();
+  return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+}
+
+const LABELS = {
+  thinking:    "Cognition",
+  tool_call:   "Tool · Invocation",
+  tool_result: "Tool · Evidence",
+  error:       "Fault"
+};
 
 function appendEvent(event) {
-  const container = document.getElementById('traceContainer');
-  const div = document.createElement('div');
+  const container = document.getElementById("feedBody");
+  const empty = document.getElementById("feedEmpty");
+  if (empty) empty.remove();
+
+  const div = document.createElement("div");
   div.className = `event ${event.type}`;
 
-  const icons = { thinking: '◈', tool_call: '⚡', tool_result: '✓', error: '✗' };
-  const labels = { thinking: 'Analysis', tool_call: 'Tool Call', tool_result: 'Tool Result', error: 'Error' };
-
-  let body = '';
-  if (event.type === 'tool_call' && event.tool_input) {
-    body = `<div class="event-body">${escHtml(event.content)}<div class="tool-input">${escHtml(JSON.stringify(event.tool_input, null, 2))}</div></div>`;
-  } else if (event.type === 'tool_result') {
-    let content = event.content;
+  let body = "";
+  if (event.type === "tool_call") {
+    body = `
+      <div class="event-body">${escHtml(event.content)}</div>
+      ${event.tool_input ? `<div class="code-block">${escHtml(JSON.stringify(event.tool_input, null, 2))}</div>` : ""}
+    `;
+  } else if (event.type === "tool_result") {
+    let pretty = event.content;
+    let isJson = false;
     try {
-      content = JSON.stringify(JSON.parse(content), null, 2);
-    } catch(e) {}
-    body = `<div class="event-body">${escHtml(content)}</div>`;
+      const parsed = JSON.parse(event.content);
+      pretty = JSON.stringify(parsed, null, 2);
+      isJson = true;
+    } catch (_) {}
+    const id = `r-${Math.random().toString(36).slice(2, 9)}`;
+    body = `
+      <button class="result-toggle" onclick="toggleResult('${id}', this)">
+        ${isJson ? "Inspect JSON payload" : "Show raw output"}
+      </button>
+      <div class="code-block" id="${id}" style="display:none">${escHtml(pretty)}</div>
+    `;
   } else {
     body = `<div class="event-body">${escHtml(event.content)}</div>`;
   }
 
   div.innerHTML = `
-    <div class="event-header">
-      <span class="dot"></span>
-      ${labels[event.type] || event.type}
-      ${event.tool_name ? `— <span style="color:var(--cyan)">${escHtml(event.tool_name)}</span>` : ''}
+    <div class="event-marker"></div>
+    <div class="event-meta">
+      <span class="kind">${LABELS[event.type] || event.type}</span>
+      ${event.tool_name ? `<span>·</span><span class="tool-name">${escHtml(event.tool_name)}</span>` : ""}
+      <span>·</span>
+      <span class="time">${timeStamp()}Z</span>
     </div>
     ${body}
   `;
 
-  // Remove placeholder if present
-  const placeholder = container.querySelector('.report-empty');
-  if (placeholder) placeholder.remove();
-
   container.appendChild(div);
-  div.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  container.scrollTop = container.scrollHeight;
 }
 
+function toggleResult(id, btn) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const open = el.style.display !== "none";
+  el.style.display = open ? "none" : "block";
+  btn.classList.toggle("open", !open);
+  btn.textContent = open
+    ? (btn.textContent.replace(/^Hide/, "Inspect").replace(/^Collapse/, "Show"))
+    : btn.textContent.replace(/^Inspect/, "Hide").replace(/^Show/, "Collapse");
+}
+
+// ═════════════════════════════════════════════════════════════
+// REPORT RENDERING
+// ═════════════════════════════════════════════════════════════
 function renderReport(report) {
   if (!report) return;
 
-  const sev = report.severity || 'UNKNOWN';
-  const action = report.recommended_action || 'UNKNOWN';
+  const sev = (report.severity || "UNKNOWN").toUpperCase();
+  const action = (report.recommended_action || "UNKNOWN").toUpperCase();
+  const sevIndex = ({ LOW: 1, MEDIUM: 2, HIGH: 3, CRITICAL: 4 })[sev] || "–";
 
-  const iocHtml = (report.iocs || []).map(ioc => `
-    <div class="ioc-item">
-      <div class="ioc-type">${escHtml(ioc.type)}</div>
-      <div>
-        <div class="ioc-value">${escHtml(ioc.value)}</div>
-        <div class="ioc-detail">${escHtml(ioc.details || ioc.source || '')}</div>
-      </div>
-      <div>
-        <div class="confidence-bar">
-          <div class="confidence-fill" style="width:${Math.round((ioc.confidence||0)*100)}%"></div>
+  const iocHtml = (report.iocs || []).map(ioc => {
+    const conf = Math.round((ioc.confidence || 0) * 100);
+    return `
+      <div class="ioc-item ${ioc.malicious ? "malicious" : ""}">
+        <div class="ioc-type-col">${escHtml(ioc.type || "—")}</div>
+        <div class="ioc-value-col">
+          <div class="ioc-value">${escHtml(ioc.value || "")}</div>
+          <div class="ioc-source">${escHtml(ioc.source || "")} ${ioc.malicious ? "· ▲ MALICIOUS" : "· BENIGN"}</div>
+          ${ioc.details ? `<div class="ioc-detail">${escHtml(ioc.details)}</div>` : ""}
         </div>
-        <div style="font-size:10px;color:var(--text-muted);text-align:right;margin-top:2px">${Math.round((ioc.confidence||0)*100)}%</div>
-      </div>
-    </div>
-  `).join('');
+        <div class="ioc-conf-col">
+          <div class="conf-num">${conf}</div>
+          <div class="conf-label">Confidence</div>
+          <div class="conf-bar"><div class="conf-fill" style="width:${conf}%"></div></div>
+        </div>
+      </div>`;
+  }).join("");
 
   const mitreHtml = (report.mitre_techniques || []).map(t => `
     <div class="mitre-item">
-      <div><span class="mitre-id">${escHtml(t.technique_id)}</span><span class="mitre-name">${escHtml(t.technique_name)}</span></div>
-      <div class="mitre-tactic">▸ ${escHtml(t.tactic)}</div>
-      <div class="mitre-desc">${escHtml(t.description)}</div>
-    </div>
-  `).join('');
+      <div class="mitre-head">
+        <span class="mitre-id">${escHtml(t.technique_id || "")}</span>
+        <span class="mitre-name">${escHtml(t.technique_name || "")}</span>
+      </div>
+      <div class="mitre-tactic">Tactic · ${escHtml(t.tactic || "—")}</div>
+      <div class="mitre-desc">${escHtml(t.description || "")}</div>
+    </div>`).join("");
 
-  const stepsHtml = (report.investigation_steps || []).map((s, i) => `
-    <li><span class="step-num">${i+1}.</span>${escHtml(s)}</li>
-  `).join('');
+  const stepsHtml = (report.investigation_steps || []).map(s =>
+    `<li>${escHtml(s)}</li>`).join("");
 
   const fpHtml = (report.false_positive_indicators || []).length
-    ? `<div class="report-section"><div class="section-title">False Positive Indicators</div>${(report.false_positive_indicators||[]).map(f=>`<div style="padding:4px 0;font-size:12px;color:var(--text-muted)">• ${escHtml(f)}</div>`).join('')}</div>`
-    : '';
+    ? `<div class="brief-section">
+         <div class="title">False-Positive Signals <span class="count">${report.false_positive_indicators.length}</span></div>
+         <ul class="fp-list">
+           ${report.false_positive_indicators.map(f => `<li>${escHtml(f)}</li>`).join("")}
+         </ul>
+       </div>`
+    : "";
 
-  document.getElementById('reportContainer').innerHTML = `
-    <div style="max-width:800px">
-      <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;flex-wrap:wrap">
-        <span class="severity-badge severity-${sev}">${sev}</span>
-        <span class="action-badge action-${action}">${action}</span>
-        <span style="color:var(--text-muted);font-size:11px">Alert ${escHtml(report.alert_id||'')}</span>
+  document.getElementById("briefBody").innerHTML = `
+    <div class="severity-hero sev-${sev}">
+      <div class="kicker">Assessed Severity</div>
+      <div class="level">
+        <span>${sev}</span>
+        <span class="num">${sevIndex}/4</span>
       </div>
-
-      <div class="report-section">
-        <div class="section-title">Summary</div>
-        <div style="font-size:13px;line-height:1.7">${escHtml(report.summary||'')}</div>
-        ${report.escalation_reason ? `<div style="margin-top:8px;padding:8px 12px;background:#2d1117;border:1px solid var(--red);border-radius:6px;font-size:12px;color:var(--red)">⚠ ${escHtml(report.escalation_reason)}</div>` : ''}
+      <div class="action-row">
+        <span class="action-pill action-${action}">${action}</span>
+        <span class="alert-id">ALERT · ${escHtml(report.alert_id || "—")}</span>
       </div>
-
-      ${iocHtml ? `<div class="report-section"><div class="section-title">Indicators of Compromise (${(report.iocs||[]).length})</div>${iocHtml}</div>` : ''}
-      ${mitreHtml ? `<div class="report-section"><div class="section-title">MITRE ATT&CK Techniques</div>${mitreHtml}</div>` : ''}
-
-      <div class="report-section">
-        <div class="section-title">Analyst Notes</div>
-        <div class="notes-box">${escHtml(report.analyst_notes||'')}</div>
-      </div>
-
-      ${stepsHtml ? `<div class="report-section"><div class="section-title">Investigation Steps</div><ul class="step-list">${stepsHtml}</ul></div>` : ''}
-      ${fpHtml}
     </div>
+
+    <div class="brief-section">
+      <div class="title">Executive Summary</div>
+      <div class="summary-text">${escHtml(report.summary || "")}</div>
+      ${report.escalation_reason
+        ? `<div class="escalation-note">${escHtml(report.escalation_reason)}</div>`
+        : ""}
+    </div>
+
+    ${iocHtml ? `
+      <div class="brief-section">
+        <div class="title">Indicators of Compromise <span class="count">${(report.iocs || []).length}</span></div>
+        ${iocHtml}
+      </div>` : ""}
+
+    ${mitreHtml ? `
+      <div class="brief-section">
+        <div class="title">MITRE ATT&CK Mapping <span class="count">${(report.mitre_techniques || []).length}</span></div>
+        ${mitreHtml}
+      </div>` : ""}
+
+    <div class="brief-section">
+      <div class="title">Analyst Notes</div>
+      <div class="notes-box">${escHtml(report.analyst_notes || "")}</div>
+    </div>
+
+    ${stepsHtml ? `
+      <div class="brief-section">
+        <div class="title">Investigation Timeline</div>
+        <ol class="step-list">${stepsHtml}</ol>
+      </div>` : ""}
+
+    ${fpHtml}
   `;
 }
 
+// ═════════════════════════════════════════════════════════════
+// ANALYZE — SSE stream handler
+// ═════════════════════════════════════════════════════════════
 async function analyze() {
-  const raw = document.getElementById('alertInput').value.trim();
+  const raw = document.getElementById("alertInput").value.trim();
+  const errEl = document.getElementById("inputError");
+
   if (!raw) {
-    document.getElementById('inputError').textContent = 'Paste an alert JSON first';
+    errEl.textContent = "▲ No payload — paste an alert or select a scenario";
     return;
   }
-
   let alert;
   try {
     alert = JSON.parse(raw);
-    document.getElementById('inputError').textContent = '';
-  } catch(e) {
-    document.getElementById('inputError').textContent = 'Invalid JSON: ' + e.message;
+    errEl.textContent = "";
+  } catch (e) {
+    errEl.textContent = "▲ Invalid JSON — " + e.message;
     return;
   }
 
-  // Reset UI
-  document.getElementById('traceContainer').innerHTML = '';
-  document.getElementById('reportContainer').innerHTML = `<div class="report-empty"><div style="font-size:32px">📋</div><div>Waiting for investigation to complete...</div></div>`;
-  document.getElementById('analyzeBtn').disabled = true;
-  setStatus('Investigation running...', true);
+  // Reset UI + counters
+  resetFeed();
+  document.getElementById("feedEmpty")?.remove();
+  resetBrief();
+  stats.turn = 0; stats.events = 0; stats.tools = null;
+  renderStats();
+  document.getElementById("statElapsed").textContent = "00:00";
+  startElapsed();
 
-  // Switch to trace tab
-  document.querySelectorAll('.tab')[0].click();
+  const btn = document.getElementById("analyzeBtn");
+  btn.disabled = true;
+  document.getElementById("analyzeLabel").textContent = "Investigating…";
+
+  setSystemStatus("active", "Investigation Active");
+  setFeedSubtitle("RECEIVING");
+  setBriefSubtitle("IN PROGRESS");
+  setReceiving(true);
 
   try {
-    const response = await fetch('/analyze/stream', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+    const response = await fetch("/analyze/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(alert)
     });
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${await response.text()}`);
-    }
+    if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
-    let buffer = '';
+    let buffer = "";
 
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop(); // keep incomplete line
+      const lines = buffer.split("\n");
+      buffer = lines.pop();
 
       for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
+        if (!line.startsWith("data: ")) continue;
         const data = line.slice(6).trim();
         if (!data) continue;
 
-        try {
-          const event = JSON.parse(data);
+        let event;
+        try { event = JSON.parse(data); } catch (_) { continue; }
 
-          if (event.type === 'done') break;
+        if (event.type === "done") break;
 
-          if (event.type === 'report') {
-            try {
-              const report = JSON.parse(event.content);
-              renderReport(report);
-              // Auto-switch to report tab
-              document.querySelectorAll('.tab')[1].click();
-              setStatus(`Investigation complete — ${report.severity} | ${report.recommended_action}`);
-            } catch(e) {
-              setStatus('Investigation complete');
-            }
-          } else if (event.type === 'error') {
-            appendEvent(event);
-            setStatus('Error: ' + event.content);
-          } else {
-            appendEvent(event);
-            if (event.type === 'tool_call') {
-              setStatus(`Calling ${event.tool_name}...`, true);
-            }
+        stats.events++;
+
+        // Count tool-connected event
+        if (event.type === "thinking" && typeof event.content === "string") {
+          const m = event.content.match(/(\d+)\s+tools available/i);
+          if (m) stats.tools = parseInt(m[1], 10);
+          const t = event.content.match(/Reasoning \(turn (\d+)\)/i);
+          if (t) stats.turn = parseInt(t[1], 10);
+        }
+        renderStats();
+
+        if (event.type === "report") {
+          try {
+            const report = JSON.parse(event.content);
+            renderReport(report);
+            setBriefSubtitle("FILED");
+            const sev = (report.severity || "").toUpperCase();
+            setSystemStatus(
+              sev === "CRITICAL" ? "critical" : sev === "HIGH" ? "warning" : "nominal",
+              sev ? `Brief Filed · ${sev}` : "Brief Filed"
+            );
+          } catch (e) {
+            appendEvent({ type: "error", content: "Report parse failure: " + e.message });
           }
-        } catch(e) {
-          // Ignore parse errors on individual events
+        } else if (event.type === "error") {
+          appendEvent(event);
+          setSystemStatus("critical", "Fault · Inspect Feed");
+        } else {
+          appendEvent(event);
         }
       }
     }
-  } catch(e) {
-    appendEvent({ type: 'error', content: e.message });
-    setStatus('Failed: ' + e.message);
+  } catch (e) {
+    appendEvent({ type: "error", content: e.message });
+    setSystemStatus("critical", "Network Fault");
   } finally {
-    document.getElementById('analyzeBtn').disabled = false;
-    if (document.getElementById('statusBar').querySelector('.spinner')) {
-      setStatus('Done');
-    }
+    btn.disabled = false;
+    document.getElementById("analyzeLabel").textContent = "Initiate Investigation";
+    setFeedSubtitle("ARCHIVED");
+    setReceiving(false);
+    stopElapsed();
   }
 }
 
+// ═════════════════════════════════════════════════════════════
+// UTIL
+// ═════════════════════════════════════════════════════════════
 function escHtml(str) {
-  if (str === null || str === undefined) return '';
+  if (str === null || str === undefined) return "";
   return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
-// Load first sample on page load
-loadSample();
+// Seed with first sample on load
+loadSample(0);
+renderStats();
 </script>
 </body>
 </html>

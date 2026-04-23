@@ -11,6 +11,7 @@ Bridges MCP servers ↔ Anthropic API:
 
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 from typing import AsyncGenerator
@@ -48,7 +49,7 @@ MCP_SERVERS = [
     ),
 ]
 
-MODEL = "claude-sonnet-4-6"
+MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 MAX_TOKENS = 8192
 
 SYSTEM_PROMPT = """You are an autonomous SOC L1 analyst copilot. Your job is to investigate security alerts and produce structured incident reports.
@@ -98,171 +99,188 @@ def _build_alert_message(alert: Alert) -> str:
 Begin your investigation. Call tools as needed to gather evidence before writing your report."""
 
 
-async def _connect_all_servers() -> tuple[list[tuple], dict[str, ClientSession], list[dict]]:
+_SENTINEL = object()  # Signals end of queue
+
+
+async def _investigation_task(alert: Alert, queue: asyncio.Queue) -> None:
     """
-    Connect to all MCP servers and collect their tool definitions.
-    Returns (contexts, tool_to_session_map, anthropic_tools).
-    Each context entry is a (stdio_client_ctx, ClientSession) tuple for cleanup.
+    Runs the full investigation in a single task so that all MCP context
+    managers (which use anyio cancel scopes) are entered and exited in the
+    same task. Events are pushed into the queue for the SSE consumer.
     """
-    tool_to_session: dict[str, ClientSession] = {}
-    anthropic_tools = []
-    contexts: list[tuple] = []
+    from contextlib import AsyncExitStack
+
+    client = anthropic.AsyncAnthropic()
 
     try:
-        for server_params in MCP_SERVERS:
-            ctx = stdio_client(server_params)
-            read, write = await ctx.__aenter__()
-            session = ClientSession(read, write)
-            await session.__aenter__()
-            await session.initialize()
+        await queue.put(AgentEvent(type="thinking", content="Connecting to MCP servers..."))
 
-            tools_result = await session.list_tools()
-            for tool in tools_result.tools:
-                tool_to_session[tool.name] = session
-                anthropic_tools.append({
-                    "name": tool.name,
-                    "description": tool.description,
-                    "input_schema": tool.inputSchema,
-                })
+        async with AsyncExitStack() as stack:
+            tool_to_session: dict[str, ClientSession] = {}
+            anthropic_tools = []
 
-            contexts.append((ctx, session))
-    except Exception:
-        # Clean up any servers that connected before the failure
-        for ctx, session in contexts:
-            try:
-                await session.__aexit__(None, None, None)
-                await ctx.__aexit__(None, None, None)
-            except Exception:
-                pass
-        raise
+            for server_params in MCP_SERVERS:
+                ctx = stdio_client(server_params)
+                read, write = await stack.enter_async_context(ctx)
+                session = ClientSession(read, write)
+                await stack.enter_async_context(session)
+                await session.initialize()
 
-    return contexts, tool_to_session, anthropic_tools
+                tools_result = await session.list_tools()
+                for tool in tools_result.tools:
+                    if tool.name in tool_to_session:
+                        print(
+                            f"[agent] tool name collision: '{tool.name}' exposed "
+                            "by multiple servers — later server wins",
+                            file=sys.stderr,
+                        )
+                    tool_to_session[tool.name] = session
+                    anthropic_tools.append({
+                        "name": tool.name,
+                        "description": tool.description,
+                        "input_schema": tool.inputSchema,
+                    })
+
+            await queue.put(AgentEvent(
+                type="thinking",
+                content=f"Connected. {len(anthropic_tools)} tools available: {', '.join(t['name'] for t in anthropic_tools)}",
+            ))
+
+            messages = [{"role": "user", "content": _build_alert_message(alert)}]
+
+            # Agentic loop — continues until Claude stops calling tools
+            iteration = 0
+            max_iterations = 15  # safety ceiling
+
+            while iteration < max_iterations:
+                iteration += 1
+
+                await queue.put(AgentEvent(type="thinking", content=f"Reasoning (turn {iteration})..."))
+
+                response = await client.messages.create(
+                    model=MODEL,
+                    max_tokens=MAX_TOKENS,
+                    system=SYSTEM_PROMPT,
+                    tools=anthropic_tools,
+                    messages=messages,
+                )
+
+                # Build the full assistant message content list
+                assistant_content = []
+                tool_results = []  # (tool_use_id, result_text) pairs
+
+                for block in response.content:
+                    if block.type == "text":
+                        text = block.text.strip()
+                        if text:
+                            await queue.put(AgentEvent(type="thinking", content=text))
+                        assistant_content.append({"type": "text", "text": block.text})
+
+                    elif block.type == "tool_use":
+                        await queue.put(AgentEvent(
+                            type="tool_call",
+                            content=f"Calling {block.name}",
+                            tool_name=block.name,
+                            tool_input=block.input,
+                        ))
+
+                        assistant_content.append({
+                            "type": "tool_use",
+                            "id": block.id,
+                            "name": block.name,
+                            "input": block.input,
+                        })
+
+                        # Route tool call to the correct MCP server
+                        session = tool_to_session.get(block.name)
+                        if not session:
+                            tool_result_text = json.dumps({"error": f"No server handles tool '{block.name}'"})
+                        else:
+                            try:
+                                mcp_result = await session.call_tool(block.name, arguments=block.input)
+                                tool_result_text = "\n".join(
+                                    c.text for c in mcp_result.content if hasattr(c, "text")
+                                )
+                            except Exception as e:
+                                tool_result_text = json.dumps({"error": str(e)})
+
+                        await queue.put(AgentEvent(
+                            type="tool_result",
+                            content=tool_result_text,
+                            tool_name=block.name,
+                        ))
+                        tool_results.append((block.id, tool_result_text))
+
+                # Append assistant turn + all tool results in one user message
+                if assistant_content:
+                    messages.append({"role": "assistant", "content": assistant_content})
+
+                if tool_results:
+                    messages.append({
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": tool_use_id,
+                                "content": result_text,
+                            }
+                            for tool_use_id, result_text in tool_results
+                        ],
+                    })
+
+                # No more tool calls — Claude is done or hit token limit
+                if response.stop_reason in ("end_turn", "max_tokens"):
+                    final_text = "\n".join(
+                        b.text for b in response.content if b.type == "text"
+                    )
+                    if response.stop_reason == "max_tokens":
+                        final_text += "\n\n[Response truncated due to max_tokens limit]"
+                    report_json = _extract_json_report(final_text)
+                    await queue.put(AgentEvent(
+                        type="report",
+                        content=json.dumps(report_json) if report_json else final_text,
+                    ))
+                    break
+            else:
+                # Loop exhausted max_iterations without a final report
+                await queue.put(AgentEvent(
+                    type="error",
+                    content=f"Investigation terminated: reached maximum iterations ({max_iterations}) without producing a report",
+                ))
+
+    except BaseException as e:
+        # Unwrap ExceptionGroup / BaseExceptionGroup to surface the root cause
+        cause = e
+        while isinstance(cause, BaseExceptionGroup) and cause.exceptions:
+            cause = cause.exceptions[0]
+        await queue.put(AgentEvent(type="error", content=f"Investigation failed: {type(cause).__name__}: {cause}"))
+
+    finally:
+        await queue.put(_SENTINEL)
 
 
 async def run_investigation(alert: Alert) -> AsyncGenerator[AgentEvent, None]:
     """
-    Main agentic loop. Yields AgentEvent objects as the investigation progresses.
-    Connects to MCP servers, runs Claude's tool-use loop, streams events.
+    Public interface. Launches the investigation in a dedicated task and
+    yields events as they arrive via a queue. This ensures MCP context
+    managers are entered and exited in the same task (avoiding anyio
+    cancel-scope errors).
     """
-    client = anthropic.AsyncAnthropic()
-    contexts = []
+    queue: asyncio.Queue = asyncio.Queue()
+    task = asyncio.create_task(_investigation_task(alert, queue))
 
     try:
-        yield AgentEvent(type="thinking", content="Connecting to MCP servers...")
-
-        contexts, tool_to_session, anthropic_tools = await _connect_all_servers()
-
-        yield AgentEvent(
-            type="thinking",
-            content=f"Connected. {len(anthropic_tools)} tools available: {', '.join(t['name'] for t in anthropic_tools)}",
-        )
-
-        messages = [{"role": "user", "content": _build_alert_message(alert)}]
-
-        # Agentic loop — continues until Claude stops calling tools
-        iteration = 0
-        max_iterations = 15  # safety ceiling
-
-        while iteration < max_iterations:
-            iteration += 1
-
-            yield AgentEvent(type="thinking", content=f"Reasoning (turn {iteration})...")
-
-            response = await client.messages.create(
-                model=MODEL,
-                max_tokens=MAX_TOKENS,
-                system=SYSTEM_PROMPT,
-                tools=anthropic_tools,
-                messages=messages,
-            )
-
-            # Build the full assistant message content list
-            assistant_content = []
-            tool_results = []  # (tool_use_id, result_text) pairs
-
-            for block in response.content:
-                if block.type == "text":
-                    text = block.text.strip()
-                    if text:
-                        yield AgentEvent(type="thinking", content=text)
-                    assistant_content.append({"type": "text", "text": block.text})
-
-                elif block.type == "tool_use":
-                    yield AgentEvent(
-                        type="tool_call",
-                        content=f"Calling {block.name}",
-                        tool_name=block.name,
-                        tool_input=block.input,
-                    )
-
-                    assistant_content.append({
-                        "type": "tool_use",
-                        "id": block.id,
-                        "name": block.name,
-                        "input": block.input,
-                    })
-
-                    # Route tool call to the correct MCP server
-                    session = tool_to_session.get(block.name)
-                    if not session:
-                        tool_result_text = json.dumps({"error": f"No server handles tool '{block.name}'"})
-                    else:
-                        try:
-                            mcp_result = await session.call_tool(block.name, arguments=block.input)
-                            tool_result_text = "\n".join(
-                                c.text for c in mcp_result.content if hasattr(c, "text")
-                            )
-                        except Exception as e:
-                            tool_result_text = json.dumps({"error": str(e)})
-
-                    yield AgentEvent(
-                        type="tool_result",
-                        content=tool_result_text,
-                        tool_name=block.name,
-                    )
-                    tool_results.append((block.id, tool_result_text))
-
-            # Append assistant turn + all tool results in one user message
-            if assistant_content:
-                messages.append({"role": "assistant", "content": assistant_content})
-
-            if tool_results:
-                messages.append({
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": tool_use_id,
-                            "content": result_text,
-                        }
-                        for tool_use_id, result_text in tool_results
-                    ],
-                })
-
-            # No more tool calls — Claude is done or hit token limit
-            if response.stop_reason in ("end_turn", "max_tokens"):
-                final_text = " ".join(
-                    b.text for b in response.content if b.type == "text"
-                )
-                if response.stop_reason == "max_tokens":
-                    final_text += "\n\n[Response truncated due to max_tokens limit]"
-                report_json = _extract_json_report(final_text)
-                yield AgentEvent(
-                    type="report",
-                    content=json.dumps(report_json) if report_json else final_text,
-                )
+        while True:
+            event = await queue.get()
+            if event is _SENTINEL:
                 break
-
-    except Exception as e:
-        yield AgentEvent(type="error", content=f"Investigation failed: {str(e)}")
-
+            yield event
     finally:
-        # Clean up all MCP sessions
-        for ctx, session in contexts:
+        if not task.done():
+            task.cancel()
             try:
-                await session.__aexit__(None, None, None)
-                await ctx.__aexit__(None, None, None)
-            except Exception:
+                await task
+            except asyncio.CancelledError:
                 pass
 
 

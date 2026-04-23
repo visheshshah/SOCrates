@@ -7,6 +7,7 @@ Mock mode active by default.
 import asyncio
 import json
 import os
+import sys
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp import types
@@ -159,32 +160,42 @@ async def list_tools() -> list[types.Tool]:
     ]
 
 
+_ABUSE_WARNED = False
+_OTX_WARNED = False
+
+
+def _warn_live_unimplemented(service: str) -> None:
+    print(
+        f"[threatintel_server] {service} key is set but live API is not "
+        "implemented yet — falling back to mock data.",
+        file=sys.stderr,
+    )
+
+
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
-    abuseipdb_key = os.getenv("ABUSEIPDB_API_KEY")
-    otx_key = os.getenv("OTX_API_KEY")
+    global _ABUSE_WARNED, _OTX_WARNED
 
     if name == "abuseipdb_lookup":
-        if abuseipdb_key:
-            result = {"note": "Live AbuseIPDB not yet implemented — add httpx call here"}
-        else:
-            ip = arguments["ip"]
-            template = "malicious" if _is_suspicious(ip) else "clean"
-            data = dict(MOCK_ABUSEIPDB[template])
-            # Resolve category codes to names
-            for report in data.get("reports", []):
-                report["category_names"] = [
-                    ABUSE_CATEGORIES.get(c, f"Category {c}") for c in report.get("categories", [])
-                ]
-            result = {"ip": ip, "mock": True, **data}
+        if os.getenv("ABUSEIPDB_API_KEY") and not _ABUSE_WARNED:
+            _warn_live_unimplemented("ABUSEIPDB_API_KEY")
+            _ABUSE_WARNED = True
+        ip = arguments["ip"]
+        template = "malicious" if _is_suspicious(ip) else "clean"
+        data = dict(MOCK_ABUSEIPDB[template])
+        for report in data.get("reports", []):
+            report["category_names"] = [
+                ABUSE_CATEGORIES.get(c, f"Category {c}") for c in report.get("categories", [])
+            ]
+        result = {"ip": ip, "mock": True, **data}
 
     elif name == "otx_lookup":
-        if otx_key:
-            result = {"note": "Live OTX not yet implemented — add httpx call here"}
-        else:
-            indicator = arguments["indicator"]
-            template = "malicious" if _is_suspicious(indicator) else "clean"
-            result = {"indicator": indicator, "mock": True, **MOCK_OTX[template]}
+        if os.getenv("OTX_API_KEY") and not _OTX_WARNED:
+            _warn_live_unimplemented("OTX_API_KEY")
+            _OTX_WARNED = True
+        indicator = arguments["indicator"]
+        template = "malicious" if _is_suspicious(indicator) else "clean"
+        result = {"indicator": indicator, "mock": True, **MOCK_OTX[template]}
 
     else:
         result = {"error": f"Unknown tool: {name}"}

@@ -7,7 +7,6 @@ Cache lives at data/mitre_enterprise.json — refreshed if older than 7 days.
 
 import asyncio
 import json
-import os
 import sys
 import time
 from pathlib import Path
@@ -23,7 +22,8 @@ CACHE_TTL_SECONDS = 7 * 24 * 3600  # 7 days
 
 
 def _load_or_fetch_stix() -> dict:
-    """Load STIX bundle from cache, fetching from MITRE GitHub if stale."""
+    """Load STIX bundle from cache, fetching from MITRE GitHub if stale.
+    Falls back to stale cache if the network fetch fails."""
     if CACHE_PATH.exists():
         age = time.time() - CACHE_PATH.stat().st_mtime
         if age < CACHE_TTL_SECONDS:
@@ -35,12 +35,19 @@ def _load_or_fetch_stix() -> dict:
 
     import urllib.request
     CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with urllib.request.urlopen(STIX_URL, timeout=30) as resp:
-        data = json.loads(resp.read())
-    with open(CACHE_PATH, "w") as f:
-        json.dump(data, f)
-    print(f"[mitre_server] Saved STIX bundle to {CACHE_PATH}", file=sys.stderr)
-    return data
+    try:
+        with urllib.request.urlopen(STIX_URL, timeout=90) as resp:
+            data = json.loads(resp.read())
+        with open(CACHE_PATH, "w") as f:
+            json.dump(data, f)
+        print(f"[mitre_server] Saved STIX bundle to {CACHE_PATH}", file=sys.stderr)
+        return data
+    except Exception as e:
+        if CACHE_PATH.exists():
+            print(f"[mitre_server] Fetch failed ({e}), using stale cache", file=sys.stderr)
+            with open(CACHE_PATH) as f:
+                return json.load(f)
+        raise
 
 
 def _parse_techniques(stix_bundle: dict) -> list[dict]:

@@ -7,6 +7,7 @@ Mock mode active by default — set USE_LIVE_WHOIS=true in .env for real lookups
 import asyncio
 import json
 import os
+import sys
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp import types
@@ -118,33 +119,48 @@ async def list_tools() -> list[types.Tool]:
     ]
 
 
+_IP_LIVE_WARNED = False
+
+
+def _mock_domain(domain: str) -> dict:
+    template = "suspicious" if _looks_suspicious_domain(domain) else "legitimate"
+    return {"domain": domain, "mock": True, **MOCK_DOMAIN_WHOIS[template]}
+
+
+def _mock_ip(ip: str) -> dict:
+    template = "suspicious" if _looks_suspicious_ip(ip) else "legitimate"
+    return {"ip": ip, "mock": True, **MOCK_IP_WHOIS[template]}
+
+
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
+    global _IP_LIVE_WARNED
     use_live = os.getenv("USE_LIVE_WHOIS", "false").lower() == "true"
 
-    if use_live:
-        try:
-            import whois  # type: ignore
-            if name == "whois_domain":
+    if name == "whois_domain":
+        if use_live:
+            try:
+                import whois  # type: ignore
                 w = whois.whois(arguments["domain"])
                 result = {k: str(v) for k, v in w.items() if v is not None}
-            elif name == "whois_ip":
-                result = {"note": "Live IP WHOIS not implemented — use ipwhois library"}
-            else:
-                result = {"error": f"Unknown tool: {name}"}
-        except Exception as e:
-            result = {"error": str(e)}
-    else:
-        if name == "whois_domain":
-            domain = arguments["domain"]
-            template = "suspicious" if _looks_suspicious_domain(domain) else "legitimate"
-            result = {"domain": domain, "mock": True, **MOCK_DOMAIN_WHOIS[template]}
-        elif name == "whois_ip":
-            ip = arguments["ip"]
-            template = "suspicious" if _looks_suspicious_ip(ip) else "legitimate"
-            result = {"ip": ip, "mock": True, **MOCK_IP_WHOIS[template]}
+            except Exception as e:
+                print(f"[whois_server] live whois_domain failed ({e}); using mock", file=sys.stderr)
+                result = _mock_domain(arguments["domain"])
         else:
-            result = {"error": f"Unknown tool: {name}"}
+            result = _mock_domain(arguments["domain"])
+
+    elif name == "whois_ip":
+        if use_live and not _IP_LIVE_WARNED:
+            print(
+                "[whois_server] USE_LIVE_WHOIS=true but live whois_ip is not "
+                "implemented yet — falling back to mock data.",
+                file=sys.stderr,
+            )
+            _IP_LIVE_WARNED = True
+        result = _mock_ip(arguments["ip"])
+
+    else:
+        result = {"error": f"Unknown tool: {name}"}
 
     return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
 

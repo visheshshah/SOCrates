@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 
+import anthropic
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
@@ -74,6 +75,7 @@ async def analyze(alert: Alert):
     """
     events = []
     report = None
+    last_error = None
 
     async for event in run_investigation(alert):
         events.append(event.model_dump())
@@ -82,6 +84,28 @@ async def analyze(alert: Alert):
                 report = json.loads(event.content)
             except json.JSONDecodeError:
                 report = {"raw": event.content}
+        elif event.type == "error":
+            last_error = event.content
+
+    if report is None and last_error is not None:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "alert_id": alert.alert_id,
+                "error": last_error,
+                "investigation_trace": events,
+            },
+        )
+
+    if report is None:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "alert_id": alert.alert_id,
+                "error": "Investigation completed without producing a report",
+                "investigation_trace": events,
+            },
+        )
 
     return {
         "alert_id": alert.alert_id,
@@ -92,4 +116,17 @@ async def analyze(alert: Alert):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "model": "claude-sonnet-4-6"}
+    model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        return {"status": "degraded", "model": model, "error": "ANTHROPIC_API_KEY not set"}
+    try:
+        client = anthropic.AsyncAnthropic()
+        await client.messages.create(
+            model=model,
+            max_tokens=1,
+            messages=[{"role": "user", "content": "ping"}],
+        )
+        return {"status": "ok", "model": model}
+    except Exception as e:
+        return {"status": "degraded", "model": model, "error": str(e)}

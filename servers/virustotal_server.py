@@ -77,8 +77,8 @@ def _is_suspicious_ip(ip: str) -> bool:
 
 
 def _is_suspicious_hash(hash_value: str) -> bool:
-    """Heuristic for mock: hashes ending in odd digits get flagged."""
-    return hash_value[-1] in "13579abcef"
+    """Heuristic for mock: hashes ending in an odd digit get flagged."""
+    return hash_value[-1] in "13579"
 
 
 app = Server("virustotal")
@@ -141,42 +141,47 @@ async def list_tools() -> list[types.Tool]:
     ]
 
 
+_LIVE_WARNED = False
+
+
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
-    api_key = os.getenv("VIRUSTOTAL_API_KEY")
+    global _LIVE_WARNED
+    if os.getenv("VIRUSTOTAL_API_KEY") and not _LIVE_WARNED:
+        print(
+            "[virustotal_server] VIRUSTOTAL_API_KEY is set but live API is not "
+            "implemented yet — falling back to mock data.",
+            file=sys.stderr,
+        )
+        _LIVE_WARNED = True
 
-    if api_key:
-        # Live path — swap in real API calls here
-        result = {"note": "Live VirusTotal API not yet implemented — add httpx calls here"}
+    if name == "virustotal_ip_lookup":
+        ip = arguments["ip"]
+        template = "default_malicious" if _is_suspicious_ip(ip) else "default_clean"
+        result = {"ip": ip, "mock": True, **MOCK_IP_RESPONSES[template]}
+
+    elif name == "virustotal_hash_lookup":
+        hash_value = arguments["hash"]
+        template = "malicious_hash" if _is_suspicious_hash(hash_value) else "clean_hash"
+        result = {"hash": hash_value, "mock": True, **MOCK_HASH_RESPONSES[template]}
+
+    elif name == "virustotal_domain_lookup":
+        domain = arguments["domain"]
+        suspicious_tlds = [".ru", ".cn", ".tk", ".top", ".xyz"]
+        is_suspicious = any(domain.endswith(t) for t in suspicious_tlds)
+        result = {
+            "domain": domain,
+            "mock": True,
+            "malicious": 18 if is_suspicious else 0,
+            "suspicious": 5 if is_suspicious else 1,
+            "harmless": 10 if is_suspicious else 68,
+            "registrar": "NameCheap" if is_suspicious else "GoDaddy",
+            "creation_date": "2023-11-01" if is_suspicious else "2010-03-15",
+            "tags": ["phishing", "malware-distribution"] if is_suspicious else [],
+            "reputation": -40 if is_suspicious else 10,
+        }
     else:
-        # Mock path
-        if name == "virustotal_ip_lookup":
-            ip = arguments["ip"]
-            template = "default_malicious" if _is_suspicious_ip(ip) else "default_clean"
-            result = {"ip": ip, "mock": True, **MOCK_IP_RESPONSES[template]}
-
-        elif name == "virustotal_hash_lookup":
-            hash_value = arguments["hash"]
-            template = "malicious_hash" if _is_suspicious_hash(hash_value) else "clean_hash"
-            result = {"hash": hash_value, "mock": True, **MOCK_HASH_RESPONSES[template]}
-
-        elif name == "virustotal_domain_lookup":
-            domain = arguments["domain"]
-            suspicious_tlds = [".ru", ".cn", ".tk", ".top", ".xyz"]
-            is_suspicious = any(domain.endswith(t) for t in suspicious_tlds)
-            result = {
-                "domain": domain,
-                "mock": True,
-                "malicious": 18 if is_suspicious else 0,
-                "suspicious": 5 if is_suspicious else 1,
-                "harmless": 10 if is_suspicious else 68,
-                "registrar": "NameCheap" if is_suspicious else "GoDaddy",
-                "creation_date": "2023-11-01" if is_suspicious else "2010-03-15",
-                "tags": ["phishing", "malware-distribution"] if is_suspicious else [],
-                "reputation": -40 if is_suspicious else 10,
-            }
-        else:
-            result = {"error": f"Unknown tool: {name}"}
+        result = {"error": f"Unknown tool: {name}"}
 
     return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
 
