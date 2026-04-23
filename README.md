@@ -1,283 +1,315 @@
+<div align="center">
+
 # Sentinel
 
-Sentinel is an agentic SOC copilot for first-pass alert triage. It takes a security alert, investigates the attached indicators with MCP tools, maps findings to MITRE ATT&CK, and returns a structured incident report with severity, recommended action, IOCs, analyst notes, and investigation steps.
+**Autonomous SOC Analyst Copilot · Claude + MCP**
 
-It is built for demos, prototypes, and security workflows where you want to show how an LLM can reason over multiple enrichment sources instead of answering from a single prompt.
+*Investigate security alerts. Map MITRE ATT&CK techniques. File structured incident briefs. All in real time.*
 
-## Highlights
+[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[![Anthropic](https://img.shields.io/badge/Claude-Sonnet-CC785C?style=flat-square)](https://anthropic.com)
+[![MCP](https://img.shields.io/badge/MCP-1.2-6B46C1?style=flat-square)](https://modelcontextprotocol.io)
+[![License](https://img.shields.io/badge/License-MIT-22C55E?style=flat-square)](LICENSE)
 
-- Autonomous alert investigation loop powered by Anthropic + MCP
-- FastAPI backend with both synchronous and streaming analysis endpoints
-- Custom web UI for submitting alerts and watching the investigation unfold
-- Tool-based enrichment for IPs, domains, hashes, WHOIS, and MITRE ATT&CK
-- Structured JSON output suitable for analyst review or downstream automation
-- Sample alerts included for C2, DNS beaconing, and malware execution scenarios
+</div>
+
+---
+
+## Overview
+
+Sentinel is an agentic security operations copilot that investigates alerts the way a human L1 analyst would — but autonomously. Drop in an alert payload, and Sentinel:
+
+1. Extracts every indicator (IPs, domains, file hashes)
+2. Calls specialized MCP tools to enrich each one across multiple threat intel sources
+3. Cross-references findings, spots contradictions, and reasons about context
+4. Maps observed TTPs to the MITRE ATT&CK framework
+5. Files a structured incident brief with severity, recommended action, IOCs, and analyst notes — streamed to the UI in real time
+
+The key idea: the agent doesn't just look things up. It *reasons* across tool outputs the same way a trained analyst does, surfacing *why* something is suspicious rather than just flagging a single score.
+
+---
+
+## Screenshot
+
+> **To add:** take a screenshot of the UI after a completed investigation, save it as `assets/screenshot.png`, and uncomment the line below.
+
+<!--
+![Sentinel UI — Incident Brief](assets/screenshot.png)
+-->
+
+*Recommended shot: the three-column view with a CRITICAL severity brief on the right, the live cognitive feed streaming in the center, and the C2 Beacon scenario loaded on the left.*
+
+---
+
+## Demo
+
+> **To add:** record a 30–45 second walkthrough (select scenario → Initiate → watch stream → brief auto-files), export as GIF, save as `assets/demo.gif`, and uncomment the line below.
+
+<!--
+![Sentinel — Live Investigation Demo](assets/demo.gif)
+-->
+
+*Suggested flow: C2 Beacon → Initiate Investigation → tool calls stream in → ESCALATE brief appears on the right.*
+
+---
 
 ## How It Works
 
-Sentinel follows a simple investigation pipeline:
+```
+                   ┌──────────────────────────────────────────────┐
+                   │              SENTINEL AGENT LOOP              │
+                   └──────────────────────────────────────────────┘
 
-1. Receive an alert payload
-2. Extract indicators such as IPs, domains, and file hashes
-3. Launch MCP servers that expose enrichment tools over stdio
-4. Let Claude decide which tools to call and how to interpret the results
-5. Cross-reference findings across threat intel and registration data
-6. Map observed behavior to MITRE ATT&CK techniques
-7. Return a structured incident report
-
-## Example Output
-
-The agent is instructed to produce a final report shaped like this:
-
-```json
-{
-  "alert_id": "ALT-2024-001",
-  "severity": "HIGH",
-  "recommended_action": "ESCALATE",
-  "summary": "Outbound traffic from an internal workstation reached infrastructure that appears consistent with command-and-control activity.",
-  "iocs": [
-    {
-      "type": "ip",
-      "value": "185.220.101.47",
-      "malicious": true,
-      "confidence": 0.96,
-      "source": "VirusTotal",
-      "details": "High malicious detections and suspicious hosting context"
-    }
-  ],
-  "mitre_techniques": [
-    {
-      "technique_id": "T1071",
-      "technique_name": "Application Layer Protocol",
-      "tactic": "Command And Control",
-      "description": "Adversaries may communicate using application layer protocols.",
-      "confidence": 0.82
-    }
-  ],
-  "analyst_notes": "The destination and domain both show suspicious characteristics across multiple tools.",
-  "escalation_reason": "Potential active C2 communication from an internal endpoint.",
-  "false_positive_indicators": [],
-  "investigation_steps": [
-    "Look up destination IP",
-    "Check domain reputation",
-    "Correlate with WHOIS",
-    "Map to MITRE ATT&CK"
-  ]
-}
+  Alert JSON          ┌─────────────┐    Tool calls    ┌──────────────────┐
+  ──────────────────► │             │ ───────────────► │   MCP Servers    │
+                      │   Claude    │                  │                  │
+  SSE event stream    │   Sonnet    │ ◄─── Results ─── │ · VirusTotal     │
+  ◄────────────────── │             │                  │ · ThreatIntel    │
+                      └─────────────┘                  │ · WHOIS          │
+                            │                          │ · MITRE ATT&CK   │
+                            ▼                          └──────────────────┘
+                     Structured Report
+                     (severity · IOCs
+                      MITRE · action)
 ```
 
-## Architecture
+The agent runs in a self-directed loop — up to 15 reasoning turns — calling whichever tools it decides are relevant before synthesizing a final brief. No fixed pipeline, no hardcoded sequence.
 
-### API layer
+---
 
-- `app/main.py`
-  Hosts the FastAPI app, serves the web UI, exposes REST and SSE endpoints, and performs a lightweight health check against Anthropic.
+## MCP Tool Surface
 
-### Agent layer
+| Server | Tools | Data Source |
+|--------|-------|-------------|
+| `virustotal_server.py` | `lookup_ip`, `lookup_domain`, `lookup_hash` | VirusTotal API |
+| `threatintel_server.py` | `check_ip_abuse`, `search_otx_pulses` | AbuseIPDB · OTX |
+| `whois_server.py` | `whois_domain`, `whois_ip` | WHOIS (live or mock) |
+| `mitre_server.py` | `search_techniques`, `get_technique_by_id` | MITRE ATT&CK Enterprise |
 
-- `app/agent.py`
-  Runs the reasoning loop, starts MCP servers as subprocesses, exposes their tools to Claude, routes tool calls, and emits investigation events.
+All servers speak the MCP stdio transport. The agent routes each tool call to the correct server at runtime — no hardcoded dispatch.
 
-### Tool layer
-
-- `servers/virustotal_server.py`
-  IP, domain, and hash reputation lookups
-- `servers/threatintel_server.py`
-  AbuseIPDB and OTX-style enrichment
-- `servers/whois_server.py`
-  Domain and IP WHOIS lookups
-- `servers/mitre_server.py`
-  MITRE ATT&CK search against the Enterprise dataset
-
-### UI layer
-
-- `app/static/index.html`
-  Browser-based interface for entering alerts, starting investigations, and watching the tool/reasoning stream in real time.
-
-## Current Data Source Behavior
-
-This matters if you are evaluating the project as a live SOC integration versus a demo:
-
-- `ANTHROPIC_API_KEY` is required for the investigation agent
-- `VIRUSTOTAL_API_KEY`, `ABUSEIPDB_API_KEY`, and `OTX_API_KEY` are recognized by the app, but those servers currently still return mock data
-- `USE_LIVE_WHOIS=true` enables live domain WHOIS via `python-whois`
-- MITRE ATT&CK data is loaded from `data/mitre_enterprise.json` and refreshed when stale
-
-In practice, Sentinel already demonstrates the core agent architecture and tool-routing pattern, while some intel providers are still stubbed for safe local demos.
-
-## Project Structure
-
-```text
-.
-├── app/
-│   ├── agent.py
-│   ├── main.py
-│   ├── models.py
-│   └── static/index.html
-├── servers/
-│   ├── mitre_server.py
-│   ├── threatintel_server.py
-│   ├── virustotal_server.py
-│   └── whois_server.py
-├── data/
-│   └── mitre_enterprise.json
-├── sample_alerts/
-│   ├── c2_communication.json
-│   ├── dns_beacon.json
-│   └── malware_execution.json
-├── .env.example
-├── mcp_config.json
-├── requirements.txt
-└── README.md
-```
+---
 
 ## Quickstart
 
-### 1. Create a virtual environment
+### Prerequisites
+
+- Python 3.11+
+- An Anthropic API key → [console.anthropic.com](https://console.anthropic.com)
+
+### 1 · Clone and create a virtual environment
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
+git clone https://github.com/visheshshah/Sentinel.git
+cd Sentinel
+python3 -m venv .venv && source .venv/bin/activate
 ```
 
-### 2. Install dependencies
+### 2 · Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 3. Configure environment variables
+### 3 · Configure environment
 
 ```bash
 cp .env.example .env
 ```
 
-Set at least:
+Open `.env` and set your keys:
 
 ```env
-ANTHROPIC_API_KEY=your_anthropic_key
-```
+# Required
+ANTHROPIC_API_KEY=sk-ant-...
 
-Optional variables:
-
-```env
+# Optional — leave blank to use realistic mock data
 VIRUSTOTAL_API_KEY=
 ABUSEIPDB_API_KEY=
 OTX_API_KEY=
+
+# Set to "true" for live WHOIS lookups
 USE_LIVE_WHOIS=false
+
+# Override model if needed (default: claude-sonnet-4-6)
 ANTHROPIC_MODEL=claude-sonnet-4-6
 ```
 
-### 4. Run the app
+> `.env` is git-ignored. Never commit it. Only `ANTHROPIC_API_KEY` is required to run Sentinel end-to-end.
+
+### 4 · Start the server
 
 ```bash
 uvicorn app.main:app --reload
 ```
 
-Open:
+| Endpoint | URL |
+|----------|-----|
+| Web UI | http://127.0.0.1:8000/ |
+| Swagger docs | http://127.0.0.1:8000/docs |
+| Health check | http://127.0.0.1:8000/health |
 
-- UI: `http://127.0.0.1:8000/`
-- Swagger docs: `http://127.0.0.1:8000/docs`
-- Health check: `http://127.0.0.1:8000/health`
+### 5 · Run your first investigation
 
-## API
-
-### `POST /analyze`
-
-Runs the full investigation and returns:
-
-- the final incident report
-- the full investigation trace
-- the original alert ID
-
-### `POST /analyze/stream`
-
-Streams investigation events as Server-Sent Events.
-
-Event types:
-
-- `thinking`
-- `tool_call`
-- `tool_result`
-- `report`
-- `error`
-- `done`
-
-### `GET /health`
-
-Checks whether the backend can make a minimal Anthropic request and returns `ok` or `degraded`.
-
-## Sample Alert Payload
-
-```json
-{
-  "alert_id": "ALT-2024-003",
-  "event_type": "dns_beaconing",
-  "source_ip": "10.0.3.22",
-  "domain": "malware-c2.tk",
-  "timestamp": "2024-01-17T22:05:33Z",
-  "raw_log": "DNS query: malware-c2.tk (47 queries in 23 minutes, interval ~30s)",
-  "additional_context": {
-    "query_count": 47,
-    "interval_seconds": 30,
-    "host": "LAPTOP-HR-05",
-    "user": "sarah.jones",
-    "first_seen": "2024-01-17T21:42:00Z"
-  }
-}
-```
-
-## Try the Included Samples
-
-Run a non-streaming investigation:
+Select one of the three built-in scenarios in the UI, or hit the API directly:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/analyze \
   -H "Content-Type: application/json" \
-  --data @sample_alerts/dns_beacon.json
+  --data @sample_alerts/c2_communication.json | jq '.report.severity, .report.recommended_action'
 ```
 
-Run a streaming investigation:
+---
+
+## API Reference
+
+### `POST /analyze`
+
+Synchronous. Runs the full investigation and returns when complete.
+
+**Request body:**
+
+```json
+{
+  "alert_id": "ALT-2024-001",
+  "event_type": "outbound_connection",
+  "source_ip": "10.0.1.45",
+  "destination_ip": "185.220.101.47",
+  "domain": "cmd.evil-domain.ru",
+  "timestamp": "2024-01-15T14:23:11Z",
+  "raw_log": "Jan 15 14:23:11 firewall PERMIT src=10.0.1.45 dst=185.220.101.47 dport=4444",
+  "additional_context": { "user": "john.doe", "host": "WORKSTATION-042" }
+}
+```
+
+**Response:**
+
+```json
+{
+  "alert_id": "ALT-2024-001",
+  "report": {
+    "severity": "HIGH",
+    "recommended_action": "ESCALATE",
+    "summary": "...",
+    "iocs": [...],
+    "mitre_techniques": [...],
+    "analyst_notes": "...",
+    "escalation_reason": "...",
+    "false_positive_indicators": [],
+    "investigation_steps": [...]
+  },
+  "investigation_trace": [...]
+}
+```
+
+---
+
+### `POST /analyze/stream`
+
+Streaming. Returns investigation events as Server-Sent Events as they happen.
+
+| Event type | When | Key fields |
+|------------|------|------------|
+| `thinking` | Agent reasoning step | `content` |
+| `tool_call` | Before a tool is invoked | `tool_name`, `tool_input` |
+| `tool_result` | After a tool returns | `tool_name`, `content` |
+| `report` | Investigation complete | `content` (JSON string) |
+| `error` | Unrecoverable failure | `content` |
+| `done` | Stream closed | — |
 
 ```bash
 curl -N -X POST http://127.0.0.1:8000/analyze/stream \
   -H "Content-Type: application/json" \
-  --data @sample_alerts/c2_communication.json
+  --data @sample_alerts/dns_beacon.json
 ```
 
-## Security and Secrets
+---
 
-- `.env` is ignored by git and should never be committed
-- `.env.example` is the safe template to publish
-- Keep API keys scoped and rotatable
-- If a secret is ever committed, rotate it immediately and rewrite history before exposing the repository
+### `GET /health`
 
-## Limitations
+Returns system status and whether Anthropic is reachable.
 
-- Live VirusTotal, AbuseIPDB, and OTX integrations are not implemented yet
-- There is no authentication or user/session isolation
-- There is no persistent case store or analyst feedback system
-- The app is an investigation copilot, not a production-ready automated response platform
+```json
+{ "status": "ok", "model": "claude-sonnet-4-6" }
+```
 
-## Roadmap
+---
 
-- Replace mock enrichments with live provider integrations
-- Add tests for MCP routing, report parsing, and alert edge cases
-- Persist investigations and support case review workflows
-- Add SIEM/EDR ingestion connectors
-- Export reports into ticketing or incident management systems
+## Included Scenarios
+
+Three realistic alert payloads are in `sample_alerts/`:
+
+| File | Scenario | Indicators |
+|------|----------|------------|
+| `c2_communication.json` | Internal host beaconing to port 4444 on a known-bad IP | IP, domain |
+| `malware_execution.json` | Word document spawning a temp-path executable | IP, MD5 hash |
+| `dns_beacon.json` | 47 DNS queries at 30-second intervals to a `.tk` domain | domain |
+
+---
+
+## Project Structure
+
+```
+Sentinel/
+├── app/
+│   ├── main.py               # FastAPI app — REST + SSE endpoints + UI serving
+│   ├── agent.py              # Agentic loop — MCP orchestration + Claude
+│   ├── models.py             # Pydantic models (Alert, IncidentReport, AgentEvent)
+│   └── static/
+│       └── index.html        # Browser UI (single-file, no build step)
+├── servers/
+│   ├── virustotal_server.py  # MCP server — VT reputation lookups
+│   ├── threatintel_server.py # MCP server — AbuseIPDB + OTX enrichment
+│   ├── whois_server.py       # MCP server — domain + IP WHOIS
+│   └── mitre_server.py       # MCP server — MITRE ATT&CK Enterprise
+├── data/
+│   └── mitre_enterprise.json # Auto-refreshed ATT&CK dataset
+├── sample_alerts/
+│   ├── c2_communication.json
+│   ├── dns_beacon.json
+│   └── malware_execution.json
+├── .env.example              # Safe template — commit this, not .env
+├── .gitignore                # .env and .venv excluded
+├── mcp_config.json
+└── requirements.txt
+```
+
+---
 
 ## Tech Stack
 
-- Python
-- FastAPI
-- Anthropic SDK
-- MCP Python SDK
-- Pydantic
-- Uvicorn
-- STIX2
-- Vanilla HTML/CSS/JavaScript
+| Layer | Technology |
+|-------|------------|
+| Agent reasoning | Anthropic Claude Sonnet via `anthropic` SDK |
+| Tool protocol | Model Context Protocol (MCP) — stdio transport |
+| Backend | FastAPI + Uvicorn |
+| Streaming | Server-Sent Events (SSE) |
+| Data models | Pydantic v2 |
+| Threat intelligence | MITRE ATT&CK via STIX2 |
+| Frontend | Vanilla HTML / CSS / JS — no build step |
+
+---
+
+## Security Notes
+
+- `.env` is git-ignored — API keys never enter version control
+- `.env.example` is the committed safe template
+- If a secret is ever accidentally committed: rotate it immediately, then use [`git filter-repo`](https://github.com/newren/git-filter-repo) or BFG Repo Cleaner to scrub history before making the repository public
+
+---
+
+## Roadmap
+
+- [ ] Live VirusTotal, AbuseIPDB, and OTX integrations (replace mock data)
+- [ ] Persistent case store with analyst feedback loop
+- [ ] SIEM / EDR ingestion connectors (webhook + syslog)
+- [ ] Report export to PDF and ticketing systems (Jira, ServiceNow)
+- [ ] Multi-alert correlation and campaign detection
+- [ ] Auth layer for multi-analyst deployments
+
+---
 
 ## License
 
-No license is currently included. Add a `LICENSE` file before broad public reuse if you want to define usage rights clearly.
+MIT — see [LICENSE](LICENSE)
