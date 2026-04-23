@@ -1,0 +1,24 @@
+{
+  "mcpServers": {
+    "virustotal": {
+      "command": "/Users/shah/MCP SOC/.venv/bin/python",
+      "args": ["/Users/shah/MCP SOC/servers/virustotal_server.py"],
+      "description": "VirusTotal IP, domain, and hash reputation lookups"
+    },
+    "whois": {
+      "command": "/Users/shah/MCP SOC/.venv/bin/python",
+      "args": ["/Users/shah/MCP SOC/servers/whois_server.py"],
+      "description": "WHOIS lookups for domains and IPs"
+    },
+    "threatintel": {
+      "command": "/Users/shah/MCP SOC/.venv/bin/python",
+      "args": ["/Users/shah/MCP SOC/servers/threatintel_server.py"],
+      "description": "AbuseIPDB and OTX AlienVault threat intelligence"
+    },
+    "mitre-attack": {
+      "command": "/Users/shah/MCP SOC/.venv/bin/python",
+      "args": ["/Users/shah/MCP SOC/servers/mitre_server.py"],
+      "description": "MITRE ATT&CK Enterprise technique search (live STIX feed)"
+    }
+  }
+}

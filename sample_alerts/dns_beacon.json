@@ -1,0 +1,15 @@
+{
+  "alert_id": "ALT-2024-003",
+  "event_type": "dns_beaconing",
+  "source_ip": "10.0.3.22",
+  "domain": "malware-c2.tk",
+  "timestamp": "2024-01-17T22:05:33Z",
+  "raw_log": "DNS query: malware-c2.tk (47 queries in 23 minutes, interval ~30s)",
+  "additional_context": {
+    "query_count": 47,
+    "interval_seconds": 30,
+    "host": "LAPTOP-HR-05",
+    "user": "sarah.jones",
+    "first_seen": "2024-01-17T21:42:00Z"
+  }
+}

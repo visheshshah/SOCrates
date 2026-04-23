@@ -1,0 +1,17 @@
+{
+  "alert_id": "ALT-2024-001",
+  "event_type": "outbound_connection",
+  "source_ip": "10.0.1.45",
+  "destination_ip": "185.220.101.47",
+  "domain": "cmd.evil-domain.ru",
+  "timestamp": "2024-01-15T14:23:11Z",
+  "raw_log": "Jan 15 14:23:11 firewall PERMIT src=10.0.1.45 dst=185.220.101.47 dport=4444",
+  "additional_context": {
+    "user": "john.doe",
+    "host": "WORKSTATION-042",
+    "bytes_sent": 48200,
+    "bytes_recv": 12800,
+    "connection_duration_seconds": 3600,
+    "dst_port": 4444
+  }
+}
