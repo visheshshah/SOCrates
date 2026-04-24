@@ -25,27 +25,37 @@ from app.models import Alert, AgentEvent
 PROJECT_ROOT = Path(__file__).parent.parent
 SERVERS_DIR = PROJECT_ROOT / "servers"
 
+# MCP's stdio_client defaults to a minimal env (HOME/PATH/etc.) when env=None,
+# which strips API keys. Forward the parent process env so servers can see keys.
+_SERVER_ENV = {
+    k: v for k, v in os.environ.items()
+    if k in (
+        "HOME", "PATH", "SHELL", "TERM", "USER", "LOGNAME", "LANG", "LC_ALL",
+        "VIRUSTOTAL_API_KEY", "ABUSEIPDB_API_KEY", "OTX_API_KEY",
+    ) and v is not None
+}
+
 # One entry per MCP server
 MCP_SERVERS = [
     StdioServerParameters(
         command=sys.executable,
         args=[str(SERVERS_DIR / "virustotal_server.py")],
-        env=None,
+        env=_SERVER_ENV,
     ),
     StdioServerParameters(
         command=sys.executable,
         args=[str(SERVERS_DIR / "whois_server.py")],
-        env=None,
+        env=_SERVER_ENV,
     ),
     StdioServerParameters(
         command=sys.executable,
         args=[str(SERVERS_DIR / "threatintel_server.py")],
-        env=None,
+        env=_SERVER_ENV,
     ),
     StdioServerParameters(
         command=sys.executable,
         args=[str(SERVERS_DIR / "mitre_server.py")],
-        env=None,
+        env=_SERVER_ENV,
     ),
 ]
 

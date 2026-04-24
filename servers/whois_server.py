@@ -9,7 +9,7 @@ No mock data — fails explicitly if a lookup errors.
 import asyncio
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp import types
@@ -70,9 +70,13 @@ def _age_days(creation) -> int | None:
         return None
     if isinstance(creation, list):
         creation = creation[0]
-    if isinstance(creation, datetime):
-        return (datetime.utcnow() - creation).days
-    return None
+    if not isinstance(creation, datetime):
+        return None
+    now = datetime.now(timezone.utc)
+    # Normalize: make both aware (UTC) or both naive
+    if creation.tzinfo is None:
+        creation = creation.replace(tzinfo=timezone.utc)
+    return (now - creation).days
 
 
 def _domain_whois(domain: str) -> dict:
@@ -125,9 +129,9 @@ def _ip_whois(ip: str) -> dict:
 
     # Try to pull abuse contact from objects
     abuse_contact = ""
-    for obj_key, obj_val in result.get("objects", {}).items():
+    for obj_key, obj_val in (result.get("objects") or {}).items():
         contact = obj_val.get("contact") or {}
-        for email_entry in contact.get("email", []):
+        for email_entry in (contact.get("email") or []):
             addr = email_entry.get("value", "")
             if "abuse" in addr.lower():
                 abuse_contact = addr
