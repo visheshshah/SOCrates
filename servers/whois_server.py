@@ -1,77 +1,18 @@
 """
 MCP Server: WHOIS
-Provides domain and IP WHOIS registration lookups.
-Mock mode active by default — set USE_LIVE_WHOIS=true in .env for real lookups via python-whois.
+Provides domain and IP WHOIS registration lookups using live data.
+Domain WHOIS: python-whois
+IP WHOIS: ipwhois (RDAP/WHOIS)
+No mock data — fails explicitly if a lookup errors.
 """
 
 import asyncio
 import json
 import os
-import sys
+from datetime import datetime
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp import types
-
-MOCK_DOMAIN_WHOIS = {
-    "suspicious": {
-        "registrar": "Namecheap, Inc.",
-        "creation_date": "2023-12-01",
-        "expiration_date": "2024-12-01",
-        "updated_date": "2023-12-01",
-        "name_servers": ["ns1.privateservers.ru", "ns2.privateservers.ru"],
-        "registrant_country": "RU",
-        "registrant_org": "PRIVACY PROTECTED",
-        "status": "clientTransferProhibited",
-        "age_days": 45,
-        "privacy_protected": True,
-    },
-    "legitimate": {
-        "registrar": "GoDaddy.com, LLC",
-        "creation_date": "2010-03-15",
-        "expiration_date": "2030-03-15",
-        "updated_date": "2023-03-10",
-        "name_servers": ["ns1.godaddy.com", "ns2.godaddy.com"],
-        "registrant_country": "US",
-        "registrant_org": "Example Corporation",
-        "status": "clientDeleteProhibited clientRenewProhibited clientTransferProhibited",
-        "age_days": 5150,
-        "privacy_protected": False,
-    },
-}
-
-MOCK_IP_WHOIS = {
-    "suspicious": {
-        "network": "185.220.0.0/16",
-        "country": "RU",
-        "org": "Suspicious Hosting LLC",
-        "asn": "AS12345",
-        "asn_description": "SUSPICIOUS-HOSTING",
-        "abuse_contact": "abuse@suspicious-hosting.ru",
-        "created": "2018-06-01",
-        "updated": "2023-01-10",
-    },
-    "legitimate": {
-        "network": "8.8.8.0/24",
-        "country": "US",
-        "org": "Google LLC",
-        "asn": "AS15169",
-        "asn_description": "GOOGLE",
-        "abuse_contact": "network-abuse@google.com",
-        "created": "1992-12-01",
-        "updated": "2023-09-01",
-    },
-}
-
-
-def _looks_suspicious_domain(domain: str) -> bool:
-    suspicious_tlds = [".ru", ".cn", ".tk", ".top", ".xyz", ".pw"]
-    return any(domain.endswith(t) for t in suspicious_tlds)
-
-
-def _looks_suspicious_ip(ip: str) -> bool:
-    suspicious_prefixes = ["185.", "194.", "91.", "45.33.", "5.188."]
-    return any(ip.startswith(p) for p in suspicious_prefixes)
-
 
 app = Server("whois")
 
@@ -90,10 +31,7 @@ async def list_tools() -> list[types.Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "domain": {
-                        "type": "string",
-                        "description": "Domain name to look up",
-                    }
+                    "domain": {"type": "string", "description": "Domain name to look up"}
                 },
                 "required": ["domain"],
             },
@@ -101,17 +39,14 @@ async def list_tools() -> list[types.Tool]:
         types.Tool(
             name="whois_ip",
             description=(
-                "Perform a WHOIS lookup on an IP address to retrieve network block info: "
+                "Perform a WHOIS/RDAP lookup on an IP address to retrieve network block info: "
                 "ASN, organization, country, and abuse contact. Useful for identifying "
                 "hosting providers associated with malicious activity."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "ip": {
-                        "type": "string",
-                        "description": "IPv4 address to look up",
-                    }
+                    "ip": {"type": "string", "description": "IPv4 address to look up"}
                 },
                 "required": ["ip"],
             },
@@ -119,48 +54,117 @@ async def list_tools() -> list[types.Tool]:
     ]
 
 
-_IP_LIVE_WARNED = False
+def _fmt_date(val) -> str:
+    """Normalize datetime / list-of-datetime / string to ISO string."""
+    if val is None:
+        return ""
+    if isinstance(val, list):
+        val = val[0]
+    if isinstance(val, datetime):
+        return val.isoformat()
+    return str(val)
 
 
-def _mock_domain(domain: str) -> dict:
-    template = "suspicious" if _looks_suspicious_domain(domain) else "legitimate"
-    return {"domain": domain, "mock": True, **MOCK_DOMAIN_WHOIS[template]}
+def _age_days(creation) -> int | None:
+    if creation is None:
+        return None
+    if isinstance(creation, list):
+        creation = creation[0]
+    if isinstance(creation, datetime):
+        return (datetime.utcnow() - creation).days
+    return None
 
 
-def _mock_ip(ip: str) -> dict:
-    template = "suspicious" if _looks_suspicious_ip(ip) else "legitimate"
-    return {"ip": ip, "mock": True, **MOCK_IP_WHOIS[template]}
+def _domain_whois(domain: str) -> dict:
+    import whois  # python-whois
+    w = whois.whois(domain)
+
+    creation = w.creation_date
+    age = _age_days(creation)
+
+    registrant_org = (
+        w.get("org")
+        or w.get("registrant_organization")
+        or w.get("registrant")
+        or ""
+    )
+    privacy_keywords = {"privacy", "protect", "proxy", "redacted", "whoisguard", "withheld"}
+    privacy_protected = any(k in str(registrant_org).lower() for k in privacy_keywords)
+
+    ns = w.name_servers or []
+    if isinstance(ns, str):
+        ns = [ns]
+
+    status = w.status or []
+    if isinstance(status, str):
+        status = [status]
+
+    return {
+        "domain":             domain,
+        "mock":               False,
+        "registrar":          str(w.registrar or ""),
+        "creation_date":      _fmt_date(creation),
+        "expiration_date":    _fmt_date(w.expiration_date),
+        "updated_date":       _fmt_date(w.updated_date),
+        "name_servers":       [str(n).lower() for n in ns],
+        "registrant_country": str(w.country or w.get("registrant_country") or ""),
+        "registrant_org":     str(registrant_org),
+        "status":             " ".join(str(s) for s in status),
+        "age_days":           age,
+        "privacy_protected":  privacy_protected,
+    }
+
+
+def _ip_whois(ip: str) -> dict:
+    from ipwhois import IPWhois
+    obj    = IPWhois(ip)
+    result = obj.lookup_rdap(depth=1)
+
+    network = result.get("network", {})
+    asn_desc = result.get("asn_description") or network.get("name", "")
+
+    # Try to pull abuse contact from objects
+    abuse_contact = ""
+    for obj_key, obj_val in result.get("objects", {}).items():
+        contact = obj_val.get("contact") or {}
+        for email_entry in contact.get("email", []):
+            addr = email_entry.get("value", "")
+            if "abuse" in addr.lower():
+                abuse_contact = addr
+                break
+        if abuse_contact:
+            break
+
+    return {
+        "ip":              ip,
+        "mock":            False,
+        "network":         network.get("cidr", ""),
+        "country":         result.get("asn_country_code", ""),
+        "org":             asn_desc,
+        "asn":             f"AS{result.get('asn', '')}",
+        "asn_description": asn_desc,
+        "abuse_contact":   abuse_contact,
+        "created":         network.get("start_address", ""),
+        "rdap_handle":     network.get("handle", ""),
+    }
 
 
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
-    global _IP_LIVE_WARNED
-    use_live = os.getenv("USE_LIVE_WHOIS", "false").lower() == "true"
-
-    if name == "whois_domain":
-        if use_live:
-            try:
-                import whois  # type: ignore
-                w = whois.whois(arguments["domain"])
-                result = {k: str(v) for k, v in w.items() if v is not None}
-            except Exception as e:
-                print(f"[whois_server] live whois_domain failed ({e}); using mock", file=sys.stderr)
-                result = _mock_domain(arguments["domain"])
-        else:
-            result = _mock_domain(arguments["domain"])
-
-    elif name == "whois_ip":
-        if use_live and not _IP_LIVE_WARNED:
-            print(
-                "[whois_server] USE_LIVE_WHOIS=true but live whois_ip is not "
-                "implemented yet — falling back to mock data.",
-                file=sys.stderr,
+    try:
+        if name == "whois_domain":
+            result = await asyncio.get_event_loop().run_in_executor(
+                None, _domain_whois, arguments["domain"]
             )
-            _IP_LIVE_WARNED = True
-        result = _mock_ip(arguments["ip"])
+        elif name == "whois_ip":
+            result = await asyncio.get_event_loop().run_in_executor(
+                None, _ip_whois, arguments["ip"]
+            )
+        else:
+            result = {"error": f"Unknown tool: {name}"}
 
-    else:
-        result = {"error": f"Unknown tool: {name}"}
+    except Exception as e:
+        result = {"error": f"{type(e).__name__}: {e}"}
 
     return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
 

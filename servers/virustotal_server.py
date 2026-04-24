@@ -1,7 +1,7 @@
 """
 MCP Server: VirusTotal
-Provides IP, domain, and file hash reputation lookups.
-Currently returns mock data — swap VIRUSTOTAL_API_KEY in .env to go live.
+Provides IP, domain, and file hash reputation lookups via the VirusTotal v3 API.
+Requires VIRUSTOTAL_API_KEY in environment. No mock fallback when key is present.
 """
 
 import asyncio
@@ -11,77 +11,32 @@ import sys
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp import types
+import httpx
 
-# Mock responses simulate realistic VT API output
-MOCK_IP_RESPONSES = {
-    "default_malicious": {
-        "malicious": 12,
-        "suspicious": 3,
-        "harmless": 15,
-        "undetected": 45,
-        "country": "RU",
-        "asn": "AS12345",
-        "as_owner": "Suspicious Hosting LLC",
-        "last_analysis_date": "2024-01-15",
-        "tags": ["malware", "c2"],
-        "reputation": -25,
-    },
-    "default_clean": {
-        "malicious": 0,
-        "suspicious": 1,
-        "harmless": 70,
-        "undetected": 5,
-        "country": "US",
-        "asn": "AS15169",
-        "as_owner": "Google LLC",
-        "last_analysis_date": "2024-01-15",
-        "tags": [],
-        "reputation": 5,
-    },
-}
-
-MOCK_HASH_RESPONSES = {
-    "malicious_hash": {
-        "malicious": 58,
-        "suspicious": 4,
-        "harmless": 2,
-        "undetected": 10,
-        "type_description": "Win32 EXE",
-        "size": 204800,
-        "names": ["svchost32.exe", "winupdate.exe"],
-        "last_analysis_date": "2024-01-20",
-        "tags": ["trojan", "rat", "persistence"],
-        "reputation": -80,
-        "magic": "PE32 executable (GUI) Intel 80386",
-    },
-    "clean_hash": {
-        "malicious": 0,
-        "suspicious": 0,
-        "harmless": 72,
-        "undetected": 2,
-        "type_description": "Win32 EXE",
-        "size": 1024000,
-        "names": ["chrome.exe"],
-        "last_analysis_date": "2024-01-18",
-        "tags": [],
-        "reputation": 20,
-        "magic": "PE32 executable (GUI) Intel 80386",
-    },
-}
-
-
-def _is_suspicious_ip(ip: str) -> bool:
-    """Heuristic for mock: treat RFC-1918 and known-good ranges as clean."""
-    suspicious_prefixes = ["185.", "194.", "91.", "45.33.", "5.188."]
-    return any(ip.startswith(p) for p in suspicious_prefixes)
-
-
-def _is_suspicious_hash(hash_value: str) -> bool:
-    """Heuristic for mock: hashes ending in an odd digit get flagged."""
-    return hash_value[-1] in "13579"
-
+VT_BASE = "https://www.virustotal.com/api/v3"
 
 app = Server("virustotal")
+
+
+def _api_key() -> str:
+    key = os.getenv("VIRUSTOTAL_API_KEY", "")
+    if not key:
+        raise RuntimeError("VIRUSTOTAL_API_KEY is not set")
+    return key
+
+
+def _headers() -> dict:
+    return {"x-apikey": _api_key(), "Accept": "application/json"}
+
+
+def _parse_stats(attrs: dict) -> dict:
+    stats = attrs.get("last_analysis_stats", {})
+    return {
+        "malicious":  stats.get("malicious", 0),
+        "suspicious": stats.get("suspicious", 0),
+        "harmless":   stats.get("harmless", 0),
+        "undetected": stats.get("undetected", 0),
+    }
 
 
 @app.list_tools()
@@ -96,10 +51,7 @@ async def list_tools() -> list[types.Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "ip": {
-                        "type": "string",
-                        "description": "IPv4 or IPv6 address to look up",
-                    }
+                    "ip": {"type": "string", "description": "IPv4 or IPv6 address to look up"}
                 },
                 "required": ["ip"],
             },
@@ -113,10 +65,7 @@ async def list_tools() -> list[types.Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "hash": {
-                        "type": "string",
-                        "description": "File hash to look up (MD5/SHA1/SHA256)",
-                    }
+                    "hash": {"type": "string", "description": "File hash (MD5/SHA1/SHA256)"}
                 },
                 "required": ["hash"],
             },
@@ -130,10 +79,7 @@ async def list_tools() -> list[types.Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "domain": {
-                        "type": "string",
-                        "description": "Domain name to look up",
-                    }
+                    "domain": {"type": "string", "description": "Domain name to look up"}
                 },
                 "required": ["domain"],
             },
@@ -141,47 +87,85 @@ async def list_tools() -> list[types.Tool]:
     ]
 
 
-_LIVE_WARNED = False
-
-
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
-    global _LIVE_WARNED
-    if os.getenv("VIRUSTOTAL_API_KEY") and not _LIVE_WARNED:
-        print(
-            "[virustotal_server] VIRUSTOTAL_API_KEY is set but live API is not "
-            "implemented yet — falling back to mock data.",
-            file=sys.stderr,
-        )
-        _LIVE_WARNED = True
+    try:
+        headers = _headers()
+    except RuntimeError as e:
+        return [types.TextContent(type="text", text=json.dumps({"error": str(e)}))]
 
-    if name == "virustotal_ip_lookup":
-        ip = arguments["ip"]
-        template = "default_malicious" if _is_suspicious_ip(ip) else "default_clean"
-        result = {"ip": ip, "mock": True, **MOCK_IP_RESPONSES[template]}
+    async with httpx.AsyncClient(timeout=20) as client:
+        try:
+            if name == "virustotal_ip_lookup":
+                ip = arguments["ip"]
+                resp = await client.get(f"{VT_BASE}/ip_addresses/{ip}", headers=headers)
+                resp.raise_for_status()
+                attrs = resp.json()["data"]["attributes"]
+                result = {
+                    "ip": ip,
+                    "mock": False,
+                    **_parse_stats(attrs),
+                    "country":           attrs.get("country", ""),
+                    "asn":               attrs.get("asn", ""),
+                    "as_owner":          attrs.get("as_owner", ""),
+                    "last_analysis_date": attrs.get("last_modification_date", ""),
+                    "tags":              attrs.get("tags", []),
+                    "reputation":        attrs.get("reputation", 0),
+                    "network":           attrs.get("network", ""),
+                }
 
-    elif name == "virustotal_hash_lookup":
-        hash_value = arguments["hash"]
-        template = "malicious_hash" if _is_suspicious_hash(hash_value) else "clean_hash"
-        result = {"hash": hash_value, "mock": True, **MOCK_HASH_RESPONSES[template]}
+            elif name == "virustotal_hash_lookup":
+                h = arguments["hash"]
+                resp = await client.get(f"{VT_BASE}/files/{h}", headers=headers)
+                resp.raise_for_status()
+                attrs = resp.json()["data"]["attributes"]
+                result = {
+                    "hash": h,
+                    "mock": False,
+                    **_parse_stats(attrs),
+                    "type_description":  attrs.get("type_description", ""),
+                    "size":              attrs.get("size", 0),
+                    "names":             attrs.get("names", [])[:10],
+                    "last_analysis_date": attrs.get("last_analysis_date", ""),
+                    "tags":              attrs.get("tags", []),
+                    "reputation":        attrs.get("reputation", 0),
+                    "magic":             attrs.get("magic", ""),
+                    "sha256":            attrs.get("sha256", ""),
+                    "md5":               attrs.get("md5", ""),
+                }
 
-    elif name == "virustotal_domain_lookup":
-        domain = arguments["domain"]
-        suspicious_tlds = [".ru", ".cn", ".tk", ".top", ".xyz"]
-        is_suspicious = any(domain.endswith(t) for t in suspicious_tlds)
-        result = {
-            "domain": domain,
-            "mock": True,
-            "malicious": 18 if is_suspicious else 0,
-            "suspicious": 5 if is_suspicious else 1,
-            "harmless": 10 if is_suspicious else 68,
-            "registrar": "NameCheap" if is_suspicious else "GoDaddy",
-            "creation_date": "2023-11-01" if is_suspicious else "2010-03-15",
-            "tags": ["phishing", "malware-distribution"] if is_suspicious else [],
-            "reputation": -40 if is_suspicious else 10,
-        }
-    else:
-        result = {"error": f"Unknown tool: {name}"}
+            elif name == "virustotal_domain_lookup":
+                domain = arguments["domain"]
+                resp = await client.get(f"{VT_BASE}/domains/{domain}", headers=headers)
+                resp.raise_for_status()
+                attrs = resp.json()["data"]["attributes"]
+                result = {
+                    "domain": domain,
+                    "mock": False,
+                    **_parse_stats(attrs),
+                    "registrar":    attrs.get("registrar", ""),
+                    "creation_date": attrs.get("creation_date", ""),
+                    "tags":         attrs.get("tags", []),
+                    "reputation":   attrs.get("reputation", 0),
+                    "categories":   attrs.get("categories", {}),
+                    "popularity_ranks": attrs.get("popularity_ranks", {}),
+                }
+
+            else:
+                result = {"error": f"Unknown tool: {name}"}
+
+        except httpx.HTTPStatusError as e:
+            try:
+                api_err = e.response.json().get("error", {})
+                detail  = f"{api_err.get('code', '')}: {api_err.get('message', e.response.text[:200])}"
+            except Exception:
+                detail = e.response.text[:300]
+            if e.response.status_code == 404:
+                result = {"error": "not_found", "detail": f"{name}: indicator not in VirusTotal database"}
+            else:
+                result = {"error": f"VT API error {e.response.status_code}", "detail": detail}
+        except Exception as e:
+            result = {"error": f"{type(e).__name__}: {e}"}
 
     return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
 

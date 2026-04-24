@@ -13,7 +13,7 @@ from pathlib import Path
 import anthropic
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
@@ -114,12 +114,22 @@ async def analyze(alert: Alert):
     }
 
 
+@app.get("/health/live")
+async def health_live():
+    """Liveness probe — no external calls, always fast."""
+    return {"status": "ok"}
+
+
 @app.get("/health")
 async def health():
+    """Readiness probe — verifies Anthropic connectivity. Returns 503 when degraded."""
     model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
-        return {"status": "degraded", "model": model, "error": "ANTHROPIC_API_KEY not set"}
+        return JSONResponse(
+            status_code=503,
+            content={"status": "degraded", "model": model, "error": "ANTHROPIC_API_KEY not set"},
+        )
     try:
         client = anthropic.AsyncAnthropic()
         await client.messages.create(
@@ -129,4 +139,7 @@ async def health():
         )
         return {"status": "ok", "model": model}
     except Exception as e:
-        return {"status": "degraded", "model": model, "error": str(e)}
+        return JSONResponse(
+            status_code=503,
+            content={"status": "degraded", "model": model, "error": str(e)},
+        )
