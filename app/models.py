@@ -28,6 +28,7 @@ class Alert(BaseModel):
     timestamp: str
     raw_log: Optional[str] = None
     additional_context: Optional[dict] = None
+    model: Optional[str] = None
 
 
 class IOC(BaseModel):

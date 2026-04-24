@@ -49,7 +49,13 @@ MCP_SERVERS = [
     ),
 ]
 
-MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+ALLOWED_MODELS = {
+    "claude-sonnet-4-6",
+    "claude-opus-4-6",
+    "claude-opus-4-7",
+    "claude-haiku-4-5-20251001",
+}
 MAX_TOKENS = 8192
 
 SYSTEM_PROMPT = """You are an autonomous SOC L1 analyst copilot. Your job is to investigate security alerts and produce structured incident reports.
@@ -102,7 +108,7 @@ Begin your investigation. Call tools as needed to gather evidence before writing
 _SENTINEL = object()  # Signals end of queue
 
 
-async def _investigation_task(alert: Alert, queue: asyncio.Queue) -> None:
+async def _investigation_task(alert: Alert, queue: asyncio.Queue, model: str) -> None:
     """
     Runs the full investigation in a single task so that all MCP context
     managers (which use anyio cancel scopes) are entered and exited in the
@@ -158,7 +164,7 @@ async def _investigation_task(alert: Alert, queue: asyncio.Queue) -> None:
                 await queue.put(AgentEvent(type="thinking", content=f"Reasoning (turn {iteration})..."))
 
                 response = await client.messages.create(
-                    model=MODEL,
+                    model=model,
                     max_tokens=MAX_TOKENS,
                     system=SYSTEM_PROMPT,
                     tools=anthropic_tools,
@@ -266,8 +272,10 @@ async def run_investigation(alert: Alert) -> AsyncGenerator[AgentEvent, None]:
     managers are entered and exited in the same task (avoiding anyio
     cancel-scope errors).
     """
+    requested = alert.model
+    model = requested if requested in ALLOWED_MODELS else DEFAULT_MODEL
     queue: asyncio.Queue = asyncio.Queue()
-    task = asyncio.create_task(_investigation_task(alert, queue))
+    task = asyncio.create_task(_investigation_task(alert, queue, model))
 
     try:
         while True:
