@@ -1,5 +1,5 @@
 """
-FastAPI application — SOC Copilot API.
+FastAPI application — SOCrates API.
 Endpoints:
   POST /analyze        — submit an alert, get back a full investigation (non-streaming)
   POST /analyze/stream — submit an alert, receive SSE stream of agent events
@@ -21,8 +21,8 @@ from app.agent import run_investigation
 from app.models import Alert, AgentEvent
 
 app = FastAPI(
-    title="Agentic SOC Copilot",
-    description="AI-powered security alert triage using Claude + MCP tools",
+    title="SOCrates",
+    description="Agentic AI security alert triage using Claude + MCP tools",
     version="0.1.0",
 )
 

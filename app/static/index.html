@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Sentinel — SOC Copilot</title>
+  <title>SOCrates — Agentic SOC Analyst</title>
 
   <!-- All theme fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -838,8 +838,8 @@
 <!-- ═════ MASTHEAD ═════ -->
 <div class="masthead">
   <div class="masthead-product">
-    <span class="masthead-name">Sentinel</span>
-    <span class="masthead-category">SOC Copilot</span>
+    <span class="masthead-name">SOCrates</span>
+    <span class="masthead-category">Agentic SOC Analyst</span>
   </div>
   <div class="masthead-divider"></div>
   <div class="masthead-meta">
@@ -963,12 +963,12 @@ function setTheme(name, btn) {
   document.documentElement.dataset.theme = name;
   document.querySelectorAll('.theme-btn').forEach(b => b.classList.remove('active'));
   (btn || document.querySelector(`[data-t="${name}"]`))?.classList.add('active');
-  try { localStorage.setItem('sentinel-theme', name); } catch(_) {}
+  try { localStorage.setItem('socrates-theme', name); } catch(_) {}
 }
 // Restore saved theme (default: linear)
 (function() {
   try {
-    const saved = localStorage.getItem('sentinel-theme');
+    const saved = localStorage.getItem('socrates-theme');
     if (saved && ['ibm','linear','sentry'].includes(saved)) setTheme(saved);
     else setTheme('linear');
   } catch(_) {}
@@ -988,12 +988,12 @@ let selectedModel = 'claude-sonnet-4-6';
 function onModelChange(val) {
   selectedModel = val;
   document.getElementById('footerModel').textContent = MODEL_LABELS[val] || val;
-  try { localStorage.setItem('sentinel-model', val); } catch(_) {}
+  try { localStorage.setItem('socrates-model', val); } catch(_) {}
 }
 // Restore saved model
 (function() {
   try {
-    const saved = localStorage.getItem('sentinel-model');
+    const saved = localStorage.getItem('socrates-model');
     if (saved && MODEL_LABELS[saved]) {
       selectedModel = saved;
       document.getElementById('modelSelect').value = saved;
@@ -1044,7 +1044,7 @@ function tickClock() {
   document.getElementById('utcClock').textContent = `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
 }
 setInterval(tickClock,1000); tickClock();
-document.getElementById('sessionId').textContent = 'SNT-' + Math.random().toString(36).slice(2,8).toUpperCase();
+document.getElementById('sessionId').textContent = 'SOC-' + Math.random().toString(36).slice(2,8).toUpperCase();
 
 // ═══════════════════════════════════════════════════════════
 // STATS + STATUS

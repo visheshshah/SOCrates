@@ -1,8 +1,8 @@
 <div align="center">
 
-# Sentinel
+# SOCrates
 
-**Autonomous SOC Analyst Copilot · Claude + MCP**
+**Autonomous SOC Analyst · Claude + MCP**
 
 *Investigate security alerts. Map MITRE ATT&CK techniques. File structured incident briefs. All in real time.*
 
@@ -18,7 +18,7 @@
 
 ## Overview
 
-Sentinel is an agentic security operations copilot that investigates alerts the way a human L1 analyst would — but autonomously. Drop in an alert payload, and Sentinel:
+SOCrates is an agentic security operations analyst that investigates alerts the way a human L1 analyst would — but autonomously. Drop in an alert payload, and SOCrates:
 
 1. Extracts every indicator (IPs, domains, file hashes)
 2. Calls specialized MCP tools to enrich each one across multiple threat intel sources
@@ -35,7 +35,7 @@ The key idea: the agent doesn't just look things up. It *reasons* across tool ou
 > **To add:** take a screenshot of the UI after a completed investigation, save it as `assets/screenshot.png`, and uncomment the line below.
 
 <!--
-![Sentinel UI — Incident Brief](assets/screenshot.png)
+![SOCrates UI — Incident Brief](assets/screenshot.png)
 -->
 
 *Recommended shot: the three-column view with a CRITICAL severity brief on the right, the live cognitive feed streaming in the center, and the C2 Beacon scenario loaded on the left.*
@@ -44,13 +44,13 @@ The key idea: the agent doesn't just look things up. It *reasons* across tool ou
 
 ## Demo
 
-> **To add:** record a 30–45 second walkthrough (select scenario → Initiate → watch stream → brief auto-files), export as GIF, save as `assets/demo.gif`, and uncomment the line below.
+> **To add:** record a 30–45 second walkthrough (select scenario → Investigate → watch stream → brief auto-files), export as GIF, save as `assets/demo.gif`, and uncomment the line below.
 
 <!--
-![Sentinel — Live Investigation Demo](assets/demo.gif)
+![SOCrates — Live Investigation Demo](assets/demo.gif)
 -->
 
-*Suggested flow: C2 Beacon → Initiate Investigation → tool calls stream in → ESCALATE brief appears on the right.*
+*Suggested flow: C2 Beacon → Investigate → tool calls stream in → ESCALATE brief appears on the right.*
 
 ---
 
@@ -58,7 +58,7 @@ The key idea: the agent doesn't just look things up. It *reasons* across tool ou
 
 ```
                    ┌──────────────────────────────────────────────┐
-                   │              SENTINEL AGENT LOOP              │
+                   │              SOCRATES AGENT LOOP              │
                    └──────────────────────────────────────────────┘
 
   Alert JSON          ┌─────────────┐    Tool calls    ┌──────────────────┐
@@ -82,12 +82,12 @@ The agent runs in a self-directed loop — up to 15 reasoning turns — calling 
 
 | Server | Tools | Data Source |
 |--------|-------|-------------|
-| `virustotal_server.py` | `lookup_ip`, `lookup_domain`, `lookup_hash` | VirusTotal API |
-| `threatintel_server.py` | `check_ip_abuse`, `search_otx_pulses` | AbuseIPDB · OTX |
-| `whois_server.py` | `whois_domain`, `whois_ip` | WHOIS (live or mock) |
-| `mitre_server.py` | `search_techniques`, `get_technique_by_id` | MITRE ATT&CK Enterprise |
+| `virustotal_server.py` | `virustotal_ip_lookup`, `virustotal_domain_lookup`, `virustotal_hash_lookup` | VirusTotal v3 API |
+| `threatintel_server.py` | `abuseipdb_lookup`, `otx_lookup` | AbuseIPDB · OTX AlienVault |
+| `whois_server.py` | `whois_domain`, `whois_ip` | python-whois · ipwhois RDAP |
+| `mitre_server.py` | `mitre_search`, `mitre_get_technique` | MITRE ATT&CK Enterprise (STIX) |
 
-All servers speak the MCP stdio transport. The agent routes each tool call to the correct server at runtime — no hardcoded dispatch.
+All servers speak the MCP stdio transport and call live upstream APIs — no mock data. The agent routes each tool call to the correct server at runtime.
 
 ---
 
@@ -101,8 +101,8 @@ All servers speak the MCP stdio transport. The agent routes each tool call to th
 ### 1 · Clone and create a virtual environment
 
 ```bash
-git clone https://github.com/visheshshah/Sentinel.git
-cd Sentinel
+git clone https://github.com/visheshshah/Sentinel.git SOCrates
+cd SOCrates
 python3 -m venv .venv && source .venv/bin/activate
 ```
 
@@ -124,19 +124,16 @@ Open `.env` and set your keys:
 # Required
 ANTHROPIC_API_KEY=sk-ant-...
 
-# Optional — leave blank to use realistic mock data
+# Threat intel — required for live investigations
 VIRUSTOTAL_API_KEY=
 ABUSEIPDB_API_KEY=
 OTX_API_KEY=
-
-# Set to "true" for live WHOIS lookups
-USE_LIVE_WHOIS=false
 
 # Override model if needed (default: claude-sonnet-4-6)
 ANTHROPIC_MODEL=claude-sonnet-4-6
 ```
 
-> `.env` is git-ignored. Never commit it. Only `ANTHROPIC_API_KEY` is required to run Sentinel end-to-end.
+> `.env` is git-ignored. Never commit it. WHOIS lookups run live without any extra configuration.
 
 ### 4 · Start the server
 
@@ -148,7 +145,8 @@ uvicorn app.main:app --reload
 |----------|-----|
 | Web UI | http://127.0.0.1:8000/ |
 | Swagger docs | http://127.0.0.1:8000/docs |
-| Health check | http://127.0.0.1:8000/health |
+| Readiness check | http://127.0.0.1:8000/health |
+| Liveness check | http://127.0.0.1:8000/health/live |
 
 ### 5 · Run your first investigation
 
@@ -179,7 +177,8 @@ Synchronous. Runs the full investigation and returns when complete.
   "domain": "cmd.evil-domain.ru",
   "timestamp": "2024-01-15T14:23:11Z",
   "raw_log": "Jan 15 14:23:11 firewall PERMIT src=10.0.1.45 dst=185.220.101.47 dport=4444",
-  "additional_context": { "user": "john.doe", "host": "WORKSTATION-042" }
+  "additional_context": { "user": "john.doe", "host": "WORKSTATION-042" },
+  "model": "claude-sonnet-4-6"
 }
 ```
 
@@ -226,9 +225,10 @@ curl -N -X POST http://127.0.0.1:8000/analyze/stream \
 
 ---
 
-### `GET /health`
+### `GET /health` · `GET /health/live`
 
-Returns system status and whether Anthropic is reachable.
+`/health` is a readiness probe — verifies Anthropic is reachable. Returns 503 when degraded so load balancers will pull traffic.
+`/health/live` is a fast liveness probe with no external calls.
 
 ```json
 { "status": "ok", "model": "claude-sonnet-4-6" }
@@ -251,7 +251,7 @@ Three realistic alert payloads are in `sample_alerts/`:
 ## Project Structure
 
 ```
-Sentinel/
+SOCrates/
 ├── app/
 │   ├── main.py               # FastAPI app — REST + SSE endpoints + UI serving
 │   ├── agent.py              # Agentic loop — MCP orchestration + Claude
@@ -261,7 +261,7 @@ Sentinel/
 ├── servers/
 │   ├── virustotal_server.py  # MCP server — VT reputation lookups
 │   ├── threatintel_server.py # MCP server — AbuseIPDB + OTX enrichment
-│   ├── whois_server.py       # MCP server — domain + IP WHOIS
+│   ├── whois_server.py       # MCP server — domain + IP WHOIS (RDAP)
 │   └── mitre_server.py       # MCP server — MITRE ATT&CK Enterprise
 ├── data/
 │   └── mitre_enterprise.json # Auto-refreshed ATT&CK dataset
@@ -281,12 +281,12 @@ Sentinel/
 
 | Layer | Technology |
 |-------|------------|
-| Agent reasoning | Anthropic Claude Sonnet via `anthropic` SDK |
+| Agent reasoning | Anthropic Claude (Sonnet 4.6, Opus 4.6/4.7, Haiku 4.5) via `anthropic` SDK |
 | Tool protocol | Model Context Protocol (MCP) — stdio transport |
 | Backend | FastAPI + Uvicorn |
 | Streaming | Server-Sent Events (SSE) |
 | Data models | Pydantic v2 |
-| Threat intelligence | MITRE ATT&CK via STIX2 |
+| Threat intelligence | VirusTotal · AbuseIPDB · OTX · MITRE ATT&CK (STIX2) |
 | Frontend | Vanilla HTML / CSS / JS — no build step |
 
 ---
@@ -301,7 +301,8 @@ Sentinel/
 
 ## Roadmap
 
-- [ ] Live VirusTotal, AbuseIPDB, and OTX integrations (replace mock data)
+- [x] Live VirusTotal, AbuseIPDB, OTX, and WHOIS integrations
+- [x] Multi-model selection in UI (Sonnet · Opus · Haiku)
 - [ ] Persistent case store with analyst feedback loop
 - [ ] SIEM / EDR ingestion connectors (webhook + syslog)
 - [ ] Report export to PDF and ticketing systems (Jira, ServiceNow)

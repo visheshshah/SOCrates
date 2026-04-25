@@ -1,5 +1,5 @@
 """
-Agentic SOC Copilot — core reasoning loop.
+SOCrates — core reasoning loop.
 
 Bridges MCP servers ↔ Anthropic API:
   1. Launches each MCP server as a subprocess (stdio transport)
